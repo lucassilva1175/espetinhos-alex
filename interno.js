@@ -662,6 +662,22 @@
       } catch (e) { $('vxE').innerHTML = '<div class="errbox">' + esc(e.message) + '</div>'; }
     });
   }
+  // IA de visão (Claude) lê a foto; se não estiver configurada ou falhar, usa o leitor simples (OCR)
+  async function lerNotaIA(f, tipo) {
+    const blob = await redim(f, 1600);
+    const b64 = await new Promise((res, rej) => { const fr = new FileReader(); fr.onload = () => res(String(fr.result).split(',')[1]); fr.onerror = () => rej(new Error('leitura')); fr.readAsDataURL(blob); });
+    const { data } = await sb.auth.getSession(); if (!data.session) return null;
+    const ctl = new AbortController(), to = setTimeout(() => ctl.abort(), 45000);
+    try {
+      const r = await fetch(AX.cfg.SUPABASE_URL + '/functions/v1/alex-ler-nota', { method: 'POST', signal: ctl.signal, headers: { Authorization: 'Bearer ' + data.session.access_token, apikey: AX.cfg.SUPABASE_ANON_KEY, 'Content-Type': 'application/json' }, body: JSON.stringify({ imagem: b64, tipo: tipo || '' }) });
+      if (!r.ok) return null;
+      const j = await r.json(); const n = j && j.nota; if (!n) return null;
+      const num = Number(n.valor), okd = (x) => (/^20\d\d-\d\d-\d\d$/.test(String(x || '')) ? x : null);
+      const tp = ['compra', 'despesa', 'venda'].includes(n.tipo) ? n.tipo : null;
+      let cat = n.categoria; if (tp === 'venda') cat = 'venda'; else if (tp === 'compra' && !CATC[cat]) cat = 'mercadoria'; else if (tp === 'despesa' && !CATD[cat]) cat = 'outros';
+      return { valor: num > 0 ? num : null, data: okd(n.data), vencimento: tp === 'despesa' ? okd(n.vencimento) : null, fornecedor: n.fornecedor || null, cliente: n.cliente || null, categoria: tp ? cat : null, tipo: tp, descricao: n.descricao || null, peso_kg: Number(n.peso_kg) > 0 ? Number(n.peso_kg) : null, ia: true };
+    } catch (e) { return null; } finally { clearTimeout(to); }
+  }
   let notaUlt = '';
   const NTIPOS = [['compra', '🛒 Compra de mercadoria'], ['despesa', '🧾 Despesa / conta / boleto'], ['venda', '💰 Venda'], ['', '🤖 Não sei (automático)']];
   async function notaAuto(f, box, depois) {
@@ -671,7 +687,8 @@
     // 2) lê o valor e lança
     box.innerHTML = '<div class="card"><img src="' + URL.createObjectURL(f) + '" style="max-width:100%;max-height:200px;border-radius:10px"><div class="small mut" id="ocrMsg" style="margin-top:6px">Lendo o valor da nota… (pode levar alguns segundos)</div></div>';
     let d = null;
-    try { d = lerNota(await ocrTexto(await redim(f, 1800))); } catch (e) { d = null; }
+    try { d = await lerNotaIA(f, forca); } catch (e) { d = null; }
+    if (!d) { try { d = lerNota(await ocrTexto(await redim(f, 1800))); } catch (e) { d = null; } }
     if (forca) {
       d = d || { valor: null, data: null, vencimento: null, fornecedor: null, categoria: null, tipo: null, cliente: null };
       d.tipo = forca;
@@ -702,14 +719,14 @@
         txt = '💰 <b>VENDA</b> de ' + money(d.valor) + (d.cliente ? ' para ' + esc(d.cliente) : '') + ' — somei nas vendas (bruto) de ' + dday(dia) + '.';
       } else {
         const pago = !d.vencimento; tab = 'despesas';
-        row = { tipo: d.tipo, categoria: d.categoria, descricao: nz(d.fornecedor) || (CATD[d.categoria] || CATC[d.categoria] || 'Nota'), fornecedor: d.fornecedor || null, valor: d.valor, data: dia, pago, vencimento: d.vencimento || null, foto_path: path, auto: true, criado_por: me.id };
+        row = { tipo: d.tipo, categoria: d.categoria, quantidade_kg: d.tipo === 'compra' && d.peso_kg ? d.peso_kg : null, descricao: nz(d.descricao) || nz(d.fornecedor) || (CATD[d.categoria] || CATC[d.categoria] || 'Nota'), fornecedor: d.fornecedor || null, valor: d.valor, data: dia, pago, vencimento: d.vencimento || null, foto_path: path, auto: true, criado_por: me.id };
         txt = (d.tipo === 'compra' ? '🛒 <b>COMPRA</b> (' : '🧾 <b>DESPESA</b> (') + esc(CATD[d.categoria] || CATC[d.categoria] || d.categoria) + ') de ' + money(d.valor) + (d.fornecedor ? ' — ' + esc(d.fornecedor) : '') + (pago ? '' : ', <b>a pagar</b> até ' + dday(d.vencimento)) + ' — lancei no Financeiro em ' + dday(dia) + '.';
       }
       const ins = await q(sb.from(tab).insert(row).select('id'));
       notaUlt = txt;
       box.innerHTML = '<div class="card" style="border-color:var(--ok)">✅ ' + txt + '<div class="small mut" style="margin-top:6px">Se a leitura errou, toque em Desfazer.</div><div class="row" style="margin-top:8px"><button class="btn sm sec grow" id="nDes">Desfazer</button><button class="btn sm grow" data-go="financeiro">Ver no Financeiro</button></div></div>';
       $('nDes').onclick = act(async () => { await q(sb.from(tab).delete().eq('id', ins[0].id)); await sb.storage.from('alex-notas').remove([path]); toast('Lançamento desfeito.', 'ok'); depois(); });
-      toast('Nota lançada automaticamente.', 'ok');
+      toast(d.ia ? '🤖 Nota lida pela IA e lançada.' : 'Nota lançada automaticamente.', 'ok');
     } catch (e) { box.innerHTML = '<div class="errbox">' + esc(e.message) + '</div>'; }
   }
 
