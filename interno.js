@@ -112,39 +112,41 @@
     if (!first && (tab === 'pedidos' || tab === 'inicio')) go(tab, true);
     if (!first && tab === 'todos' && isAdmin()) tTodos(true);
   }
+  const FILA_ST = { pagamento_confirmado: 'Novo pedido (pago)', em_separacao: 'Separando', pronto_entrega: 'Pronto para sair', saiu_entrega: 'Saiu para entrega' };
+  let filaF = 'todos';
   function orderCard(o) {
     const a = o.endereco || {}, its = o.itens_pedido || [];
-    const rs = RES.filter((r) => r.pedido_id === o.id);
-    const tot = its.reduce((s, i) => s + i.pacotes, 0);
-    let h = '<div class="card order"><div class="row"><h3 class="grow">Pedido #' + o.numero + '</h3><span class="tag y">' + esc(STATUS[o.status]) + '</span></div>' +
-      '<div class="small mut">Pago em ' + dt(o.pago_em) + ' • ' + esc(o.cliente_nome) + (o.separado_por ? ' • Separação: <b>' + esc(nm(o.separado_por)) + '</b>' : '') + '</div>' +
-      '<div style="margin:6px 0">📍 ' + esc(a.rua + ', ' + a.numero + (a.complemento ? ' — ' + a.complemento : '') + ' — ' + a.bairro + ', ' + a.cidade + '/' + a.estado) + (a.referencia ? '<br><span class="mut small">Ref.: ' + esc(a.referencia) + '</span>' : '') + '</div>' +
-      (o.observacoes ? '<div class="warn" style="padding:8px 10px">📝 ' + esc(o.observacoes) + '</div>' : '') +
-      '<div class="small mut">Previsão: ' + esc(previsaoTxt(o.previsao)) + '</div>';
+    const end = (a.rua || '') + ', ' + (a.numero || '') + (a.complemento ? ' — ' + a.complemento : '') + ' - ' + (a.bairro || '') + ', ' + (a.cidade || '') + '/' + (a.estado || '') + (a.cep ? ' (CEP ' + a.cep + ')' : '');
+    const mapUrl = 'https://www.google.com/maps/search/?api=1&query=' + encodeURIComponent(end);
+    const zap = 'https://wa.me/55' + String(o.cliente_tel || '').replace(/\D/g, '').replace(/^55/, '');
+    const forma = o.forma_pagamento || 'online';
+    let h = '<div class="card order ' + o.status + '"><h3>#' + o.numero + ' • ' + esc(FILA_ST[o.status] || STATUS[o.status]) + '</h3>' +
+      '<div class="meta small mut">' + dt(o.pago_em || o.created_at) + (o.separado_por ? ' • Separando: ' + esc(nm(o.separado_por)) : '') + '</div>' +
+      '<div style="margin-top:4px"><b>' + esc(o.cliente_nome) + '</b> • <a style="color:var(--y)" target="_blank" rel="noopener" href="' + esc(zap) + '">' + esc(o.cliente_tel) + '</a></div>' +
+      '<div style="margin:4px 0">📍 ' + esc(end) + ' <a href="' + esc(mapUrl) + '" target="_blank" rel="noopener" style="color:var(--y)">ver no mapa</a></div>';
     if (o.status === 'em_separacao') {
-      h += its.map((i) => '<label class="pcheck ' + (i.conferido ? 'ok' : '') + '" style="margin:6px 0"><input type="checkbox" data-conf="' + i.id + '" ' + (i.conferido ? 'checked' : '') + '><span><b>' + pk(i.pacotes) + '</b> — ' + esc(i.nome) + ' <span class="mut small">(' + eq(i.pacotes, i) + ')</span></span></label>').join('');
+      h += '<div class="small mut" style="margin-top:6px">Marque cada item conforme separar:</div>' + its.map((i) => '<label class="pcheck ' + (i.conferido ? 'ok' : '') + '" style="margin:6px 0"><input type="checkbox" data-conf="' + i.id + '" ' + (i.conferido ? 'checked' : '') + '><span><b>' + i.pacotes + 'x</b> ' + esc(i.nome) + '</span></label>').join('');
     } else {
-      h += its.map((i) => '<div class="sumline"><span><b>' + pk(i.pacotes) + '</b> — ' + esc(i.nome) + ' <span class="mut small">(' + eq(i.pacotes, i) + ')</span></span></div>').join('');
+      h += '<ul style="margin:6px 0 6px 20px;padding:0">' + its.map((i) => '<li><b>' + i.pacotes + 'x</b> ' + esc(i.nome) + '</li>').join('') + '</ul>';
     }
-    h += '<div class="small mut">Total: ' + pk(tot) + ' (' + eqSum(its) + ')</div>';
-    if (rs.length && (o.status === 'pagamento_confirmado' || o.status === 'em_separacao')) {
-      h += '<div class="small" style="margin-top:6px"><b>Separar primeiro o que vence antes:</b><br>' + rs.map((r) => '• ' + pk(r.qtd) + ' de ' + esc(r.lotes.produtos.nome) + ' — lote ' + esc(r.lotes.codigo) + ' (vence ' + dday(r.lotes.validade) + ')').join('<br>') + '</div>';
-    }
-    h += '<div class="row" style="margin-top:10px">';
-    if (o.status === 'pagamento_confirmado') h += '<button class="btn" data-a="assumir" data-id="' + o.id + '">Assumir separação</button>';
+    h += '<div>💳 Pago no ' + esc(forma) + ' ✅</div>' + (o.observacoes ? '<div style="margin-top:4px">📝 ' + esc(o.observacoes) + '</div>' : '') +
+      (isAdmin() ? '<div class="price" style="font-size:22px;margin-top:6px">TOTAL ' + money(o.total) + '</div>' : '') + '<div class="row" style="margin-top:10px">';
+    if (o.status === 'pagamento_confirmado') h += '<button class="btn grow" data-a="assumir" data-id="' + o.id + '">Assumir separação</button>';
     if (o.status === 'em_separacao') {
       const ok = its.every((i) => i.conferido);
       h += '<button class="btn green grow" data-a="pronto" data-id="' + o.id + '" ' + (ok ? '' : 'disabled') + '>Pronto para entrega</button><button class="btn sec sm" data-a="devolver" data-id="' + o.id + '">Devolver à fila</button>';
     }
-    if (o.status === 'pronto_entrega') h += '<button class="btn green grow" data-a="saida" data-id="' + o.id + '">Registrar saída para entrega</button><button class="btn sec sm" data-a="devolver" data-id="' + o.id + '">Devolver à fila</button>';
-    if (o.status === 'saiu_entrega') h += '<div class="small mut grow">Saiu em ' + dt(o.saiu_em) + ' • Liberado por ' + esc(nm(o.liberado_por)) + '</div><button class="btn sm green" data-a="entregue" data-id="' + o.id + '">Marcar entregue</button>';
+    if (o.status === 'pronto_entrega') h += '<button class="btn green grow" data-a="saida" data-id="' + o.id + '">SAIU PARA ENTREGA</button><button class="btn sec sm" data-a="devolver" data-id="' + o.id + '">Devolver à fila</button>';
+    if (o.status === 'saiu_entrega') h += '<button class="btn green grow" data-a="entregue" data-id="' + o.id + '">Entregue</button>';
     return h + '</div></div>';
   }
   async function tPedidos() {
-    const col = (s, t) => { const l = ORD.filter((o) => o.status === s); return '<div><h3>' + t + ' <span class="tag">' + l.length + '</span></h3>' + (l.map(orderCard).join('') || '<div class="card mut small">Nenhum pedido.</div>') + '</div>'; };
-    $('view').innerHTML = '<h2>Pedidos pagos</h2><div class="small mut" style="margin-bottom:10px">Só aparecem pedidos com pagamento confirmado. A tela avisa quando entrar um novo.</div><div class="cols3">' +
-      col('pagamento_confirmado', '💰 Aguardando separação') + col('em_separacao', '🧰 Em separação') + col('pronto_entrega', '✅ Prontos para sair') + '</div>' +
-      (ORD.some((o) => o.status === 'saiu_entrega') ? '<h3 style="margin-top:18px">🛵 Saíram para entrega</h3><div class="cols3">' + ORD.filter((o) => o.status === 'saiu_entrega').map(orderCard).join('') + '</div>' : '');
+    const n = (st) => ORD.filter((o) => o.status === st).length;
+    const chips = [['todos', 'Todos (' + ORD.length + ')'], ['pagamento_confirmado', 'Novos (' + n('pagamento_confirmado') + ')'], ['em_separacao', 'Separando (' + n('em_separacao') + ')'], ['pronto_entrega', 'Prontos (' + n('pronto_entrega') + ')'], ['saiu_entrega', 'Em entrega (' + n('saiu_entrega') + ')']];
+    const lista = ORD.filter((o) => filaF === 'todos' || o.status === filaF);
+    $('view').innerHTML = '<h2>Pedidos</h2><div class="small mut" style="margin-bottom:8px">Só aparecem pedidos já pagos. A tela avisa quando entrar um novo.</div>' +
+      '<div class="row" style="margin-bottom:10px">' + chips.map((c) => '<button class="pill ' + (c[0] === filaF ? 'on' : '') + '" data-fq="' + c[0] + '">' + c[1] + '</button>').join('') + '</div>' +
+      (lista.map(orderCard).join('') || '<div class="card mut">Nenhum pedido por aqui.</div>');
   }
   async function orderAction(a, id) {
     if (a === 'assumir') await rpc('assumir_separacao', { p_pedido: id });
@@ -599,6 +601,7 @@
     }
     const pw = t.closest('[data-pw]'); if (pw) return senhaModal(pw.dataset.pw, pw.dataset.nome);
     if (t.closest('[data-pw-self]')) return senhaModal(null);
+    const fq = t.closest('[data-fq]'); if (fq) { filaF = fq.dataset.fq; return tPedidos(); }
     const of = t.closest('[data-of]'); if (of) { ordFilter = of.dataset.of; return tTodos(); }
     const x = t.closest('[data-x]'); if (x) return busy(x, async () => { try { await adminOrder(x.dataset.x, x.dataset.id); } catch (y) { toast(y.message, 'err'); } });
     const qp = t.closest('[data-qprice]');
