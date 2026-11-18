@@ -67,7 +67,7 @@
   $('btnSair').onclick = async () => { stopAll(); await sb.auth.signOut(); location.reload(); };
 
   // ---------- estrutura ----------
-  const TABS_EQ = [['inicio', '🏠 Início'], ['pedidos', '📦 Pedidos'], ['producao', '➕ Produzir'], ['estoque', '❄️ Câmara fria']];
+  const TABS_EQ = [['inicio', '🏠 Início'], ['pedidos', '📦 Pedidos'], ['producao', '➕ Produzir'], ['estoque', '❄️ Câmara fria'], ['salario', '💵 Salário']];
   const TABS_AD = [['inicio', '🏠 Início'], ['pedidos', '📦 Fila'], ['todos', '🧾 Todos os pedidos'], ['estoque', '❄️ Câmara fria'], ['produtos', '🍢 Produtos'], ['equipe', '👥 Equipe'], ['usuarios', '🔑 Senhas'], ['folha', '👩‍🍳 Folha'], ['financeiro', '💰 Financeiro'], ['entrega', '🚚 Entrega'], ['pagto', '💳 Pagamentos'], ['relat', '📊 Relatórios']];
   async function start() {
     const list = AREA === 'admin' ? TABS_AD : TABS_EQ;
@@ -92,7 +92,7 @@
     document.querySelectorAll('#tabs [data-tab]').forEach((b) => b.classList.toggle('on', b.dataset.tab === t));
     if (!silent) window.scrollTo(0, 0);
     try {
-      const fn = { inicio: tInicio, pedidos: tPedidos, producao: tProducao, estoque: tEstoque, todos: tTodos, produtos: tProdutos, equipe: tEquipe, usuarios: tUsuarios, folha: tFolha, financeiro: tFinanceiro, entrega: tEntrega, pagto: tPagto, relat: tRelat }[t];
+      const fn = { inicio: tInicio, pedidos: tPedidos, producao: tProducao, estoque: tEstoque, todos: tTodos, produtos: tProdutos, equipe: tEquipe, usuarios: tUsuarios, salario: tSalario, folha: tFolha, financeiro: tFinanceiro, entrega: tEntrega, pagto: tPagto, relat: tRelat }[t];
       await fn();
     } catch (e) { $('view').innerHTML = '<div class="errbox">' + esc(e.message) + '</div>'; }
   }
@@ -362,6 +362,30 @@
         (u.role === 'bloqueado' ? '<button class="btn sm green" data-pap="funcionaria" data-id="' + u.id + '">Reativar</button>' : '') + (u.role !== 'admin' ? '<button class="btn sm sec" data-pw="' + u.id + '" data-nome="' + esc(u.nome || AX.userName(u.email)) + '">Trocar senha</button>' : '') + '</div></div>').join('') || '<div class="card mut">Ninguém na equipe ainda.</div>');
   }
 
+  // ---------- salário da funcionária (só o dela) ----------
+  async function tSalario() {
+    const r = await rpc('meu_salario', { p_mes: mesSel + '-01' });
+    let h = '<h2>Meu salário</h2><div class="row" style="margin:8px 0"><div class="grow"><label style="margin-top:0">Mês</label><input id="sMes" type="month" value="' + mesSel + '"></div></div>';
+    if (!r.cadastrada) {
+      $('view').innerHTML = h + '<div class="warn">O seu salário ainda não foi cadastrado. Fale com o Alexandre.</div>';
+    } else {
+      const TL2 = { vale: 'Vale', hora_extra: 'Hora extra', desconto: 'Desconto', bonus: 'Bônus' };
+      h += '<div class="card"><div class="small mut">🕗 ' + esc(r.jornada) + '</div>' +
+        '<div class="sumline"><span>Salário base</span><b>' + money(r.salario) + '</b></div>' +
+        '<div class="sumline"><span>Comissão: <b>' + r.pacotes_feitos + ' pacote' + (Number(r.pacotes_feitos) === 1 ? '' : 's') + '</b> × ' + money(r.comissao_pacote) + '</span><b style="color:var(--ok)">+ ' + money(r.comissao) + '</b></div>' +
+        '<div class="sumline"><span>Horas extras (' + Number(r.he_horas) + ' h)</span><b>' + money(r.he_valor) + '</b></div>' +
+        (Number(r.bonus) ? '<div class="sumline"><span>Bônus</span><b>' + money(r.bonus) + '</b></div>' : '') +
+        '<div class="sumline"><span>Vales que você já pegou</span><b style="color:var(--bad)">− ' + money(r.vales) + '</b></div>' +
+        (Number(r.descontos) ? '<div class="sumline"><span>Descontos</span><b style="color:var(--bad)">− ' + money(r.descontos) + '</b></div>' : '') +
+        '<div class="sumline tot"><span>Você recebe em ' + dday(r.pagamento_em) + '</span><span>' + money(r.liquido) + '</span></div>' +
+        '<div class="small mut" style="margin-top:6px">O pagamento de ' + mesTxt(mesSel) + ' cai no 5º dia útil do mês seguinte. O valor muda conforme você produz.</div></div>';
+      h += '<div class="card"><h3>Pacotes que você fez em ' + mesTxt(mesSel) + '</h3>' + (r.dias.length ? '<div class="scroll"><table><tr><th>Dia</th><th>Pacotes</th><th>Comissão</th></tr>' + r.dias.map((d) => '<tr><td>' + dday(d.dia) + '</td><td><b>' + d.pacotes + '</b></td><td>' + money(Number(d.pacotes) * Number(r.comissao_pacote)) + '</td></tr>').join('') + '</table></div>' : '<div class="mut">Nenhuma produção registrada neste mês.</div>') + '</div>';
+      if (r.lancamentos.length) h += '<div class="card"><h3>Vales e extras</h3><table><tr><th>Dia</th><th>O que</th><th>Valor</th></tr>' + r.lancamentos.map((l) => '<tr><td>' + dday(l.data) + '</td><td>' + TL2[l.tipo] + (l.horas ? ' (' + Number(l.horas) + ' h)' : '') + '</td><td>' + money(l.valor) + '</td></tr>').join('') + '</table></div>';
+      $('view').innerHTML = h;
+    }
+    $('sMes').onchange = (e) => { if (e.target.value) { mesSel = e.target.value; tSalario(); } };
+  }
+
   // ---------- admin: usuários e senhas ----------
   let uBusca = '';
   async function tUsuarios() {
@@ -411,7 +435,8 @@
       const ls = lanc.filter((l) => l.pessoa_id === p.id);
       return '<div class="card"><div class="row"><h3 class="grow">' + esc(p.nome) + '</h3><button class="btn sm sec" data-ped="' + p.id + '">Editar</button></div>' +
         '<div class="small mut">🕗 ' + esc(p.jornada) + '</div><div class="sumline"><span>Salário base</span><b>' + money(p.salario) + '</b></div>' +
-        '<div class="sumline small mut"><span>Valor da hora normal / hora extra (+' + p.adicional_he + '%)</span><span>' + money(p.valor_hora) + ' / ' + money(p.valor_hora_extra) + '</span></div>' +
+        '<div class="sumline small mut"><span>Valor da hora extra</span><span>' + money(p.valor_hora_extra) + ' por hora</span></div>' +
+        '<div class="sumline"><span>Comissão (' + p.pacotes_feitos + ' pacotes × ' + money(p.comissao_pacote) + ')</span><b>' + money(p.comissao) + '</b></div>' +
         '<div class="sumline"><span>Horas extras no mês (' + Number(p.he_horas) + ' h)</span><b>' + money(p.he_valor) + '</b></div>' +
         (Number(p.bonus) ? '<div class="sumline"><span>Bônus</span><b>' + money(p.bonus) + '</b></div>' : '') +
         '<div class="sumline"><span>Vales (já adiantados)</span><b style="color:var(--bad)">− ' + money(p.vales) + '</b></div>' +
@@ -433,19 +458,20 @@
     const real = p ? await q(sb.from('pessoal').select('profile_id,ativo').eq('id', p.id).single()) : { profile_id: null, ativo: true };
     modal('<h3>' + (p ? 'Editar' : 'Nova') + ' funcionária</h3><label>Nome</label><input id="fpNome" value="' + esc(x.nome) + '">' +
       '<label>Salário base mensal (R$)</label><input id="fpSal" inputmode="decimal" value="' + String(x.salario).replace('.', ',') + '">' +
-      '<label>Horário de trabalho</label><input id="fpJor" value="' + esc(x.jornada || 'Segunda a sábado, das 8h às 18h') + '"><div class="cols"><div><label>Horas por mês</label><input id="fpHoras" type="number" min="1" value="' + x.horas_mensais + '"></div><div><label>Adicional da hora extra (%)</label><input id="fpAd" inputmode="decimal" value="' + String(x.adicional_he).replace('.', ',') + '"></div></div>' +
-      '<div class="small mut">Hora normal = salário ÷ horas por mês. Hora extra = hora normal + adicional.</div>' +
+      '<label>Horário de trabalho</label><input id="fpJor" value="' + esc(x.jornada || 'Segunda a sábado, das 8h às 18h') + '"><div class="cols"><div><label>Horas por mês</label><input id="fpHoras" type="number" min="1" value="' + x.horas_mensais + '"></div><div><label>Valor da hora extra (R$)</label><input id="fpAd" inputmode="decimal" value="' + String(x.valor_hora_extra == null ? 7 : x.valor_hora_extra).replace('.', ',') + '"></div></div>' +
+      '<label>Comissão por pacote produzido (R$)</label><input id="fpCom" inputmode="decimal" value="' + String(x.comissao_pacote == null ? 0.5 : x.comissao_pacote).replace('.', ',') + '"><div class="small mut">A hora extra é paga pelo valor fixo informado acima. A comissão é paga sobre os pacotes que ela registra em Produzir.</div>' +
       '<label>Ligar ao login dela (opcional)</label><select id="fpLogin"><option value="">— sem login —</option>' + logins.map((l) => '<option value="' + l.id + '" ' + (real.profile_id === l.id ? 'selected' : '') + '>' + esc(l.nome || AX.userName(l.email)) + '</option>').join('') + '</select>' +
       (p ? '<label>Situação</label><select id="fpAtivo"><option value="1" ' + (real.ativo ? 'selected' : '') + '>Ativa</option><option value="0" ' + (!real.ativo ? 'selected' : '') + '>Desligada (some da folha)</option></select>' : '') +
       '<div id="fpErr"></div><div class="row" style="margin-top:12px"><button class="btn sec grow" id="fpNo">Cancelar</button><button class="btn grow" id="fpOk">Salvar</button></div>');
     $('fpNo').onclick = closeModal;
     $('fpOk').onclick = act(async () => {
       const err = (m) => { $('fpErr').innerHTML = '<div class="errbox">' + esc(m) + '</div>'; };
-      const row = { nome: nz($('fpNome').value), jornada: nz($('fpJor').value) || 'Segunda a sábado, das 8h às 18h', salario: numBR($('fpSal').value), horas_mensais: parseInt($('fpHoras').value, 10), adicional_he: numBR($('fpAd').value), profile_id: $('fpLogin').value || null };
+      const row = { nome: nz($('fpNome').value), jornada: nz($('fpJor').value) || 'Segunda a sábado, das 8h às 18h', salario: numBR($('fpSal').value), horas_mensais: parseInt($('fpHoras').value, 10), hora_extra_valor: numBR($('fpAd').value), comissao_pacote: numBR($('fpCom').value), profile_id: $('fpLogin').value || null };
       if (row.nome.length < 2) return err('Digite o nome.');
       if (!(row.salario >= 0)) return err('Digite o salário.');
       if (!(row.horas_mensais > 0)) return err('Digite as horas por mês (ex.: 220).');
-      if (!(row.adicional_he >= 0)) return err('Digite o adicional da hora extra (ex.: 50).');
+      if (!(row.hora_extra_valor >= 0)) return err('Digite o valor da hora extra (ex.: 7,00).');
+      if (!(row.comissao_pacote >= 0)) return err('Digite a comissão por pacote (ex.: 0,50).');
       if (p) row.ativo = $('fpAtivo').value === '1';
       try { if (p) await q(sb.from('pessoal').update(row).eq('id', p.id)); else await q(sb.from('pessoal').insert(row)); closeModal(); toast('Salvo.', 'ok'); tFolha(); } catch (e) { err(e.message); }
     });
