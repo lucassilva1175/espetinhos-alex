@@ -430,7 +430,7 @@
     const tot = (k) => r.folha.reduce((x, p) => x + Number(p[k]), 0);
     let h = '<div class="row"><h2 class="grow">Folha de pagamento</h2><button class="btn sm" id="pNova">+ Funcionária</button></div>' + mesPicker() +
       '<div class="kpi" style="margin-bottom:12px"><div><span class="small mut">Salários (base)</span><b>' + money(tot('salario')) + '</b></div><div><span class="small mut">Vales no mês</span><b>' + money(tot('vales')) + '</b></div><div><span class="small mut">Horas extras (valor)</span><b>' + money(tot('he_valor')) + '</b></div><div><span class="small mut">A pagar no 5º dia útil (' + dday(r.pagamento_em) + ')</span><b>' + money(r.folha_liquido) + '</b></div></div>' +
-      '<div class="small mut" style="margin-bottom:10px">O pagamento de ' + mesTxt(mesSel) + ' cai no 5º dia útil do mês seguinte (segunda a sábado, sem domingos e feriados nacionais fixos). Vales e descontos do mês são abatidos dele.</div>';
+      '<div class="small mut" style="margin-bottom:10px">O pagamento de ' + mesTxt(mesSel) + ' cai no 5º dia útil do mês seguinte (segunda a sexta, sem feriados nacionais fixos). Vales e descontos do mês são abatidos dele.</div>';
     h += r.folha.map((p) => {
       const ls = lanc.filter((l) => l.pessoa_id === p.id);
       return '<div class="card"><div class="row"><h3 class="grow">' + esc(p.nome) + '</h3><button class="btn sm sec" data-ped="' + p.id + '">Editar</button></div>' +
@@ -458,7 +458,7 @@
     const real = p ? await q(sb.from('pessoal').select('profile_id,ativo').eq('id', p.id).single()) : { profile_id: null, ativo: true };
     modal('<h3>' + (p ? 'Editar' : 'Nova') + ' funcionária</h3><label>Nome</label><input id="fpNome" value="' + esc(x.nome) + '">' +
       '<label>Salário base mensal (R$)</label><input id="fpSal" inputmode="decimal" value="' + String(x.salario).replace('.', ',') + '">' +
-      '<label>Horário de trabalho</label><input id="fpJor" value="' + esc(x.jornada || 'Segunda a sábado, das 8h às 18h') + '"><div class="cols"><div><label>Horas por mês</label><input id="fpHoras" type="number" min="1" value="' + x.horas_mensais + '"></div><div><label>Valor da hora extra (R$)</label><input id="fpAd" inputmode="decimal" value="' + String(x.valor_hora_extra == null ? 7 : x.valor_hora_extra).replace('.', ',') + '"></div></div>' +
+      '<label>Horário de trabalho</label><input id="fpJor" value="' + esc(x.jornada || 'Segunda a sexta, das 8h às 18h') + '"><div class="cols"><div><label>Horas por mês</label><input id="fpHoras" type="number" min="1" value="' + x.horas_mensais + '"></div><div><label>Valor da hora extra (R$)</label><input id="fpAd" inputmode="decimal" value="' + String(x.valor_hora_extra == null ? 7 : x.valor_hora_extra).replace('.', ',') + '"></div></div>' +
       '<label>Comissão por pacote produzido (R$)</label><input id="fpCom" inputmode="decimal" value="' + String(x.comissao_pacote == null ? 0.5 : x.comissao_pacote).replace('.', ',') + '"><div class="small mut">A hora extra é paga pelo valor fixo informado acima. A comissão é paga sobre os pacotes que ela registra em Produzir.</div>' +
       '<label>Ligar ao login dela (opcional)</label><select id="fpLogin"><option value="">— sem login —</option>' + logins.map((l) => '<option value="' + l.id + '" ' + (real.profile_id === l.id ? 'selected' : '') + '>' + esc(l.nome || AX.userName(l.email)) + '</option>').join('') + '</select>' +
       (p ? '<label>Situação</label><select id="fpAtivo"><option value="1" ' + (real.ativo ? 'selected' : '') + '>Ativa</option><option value="0" ' + (!real.ativo ? 'selected' : '') + '>Desligada (some da folha)</option></select>' : '') +
@@ -466,7 +466,7 @@
     $('fpNo').onclick = closeModal;
     $('fpOk').onclick = act(async () => {
       const err = (m) => { $('fpErr').innerHTML = '<div class="errbox">' + esc(m) + '</div>'; };
-      const row = { nome: nz($('fpNome').value), jornada: nz($('fpJor').value) || 'Segunda a sábado, das 8h às 18h', salario: numBR($('fpSal').value), horas_mensais: parseInt($('fpHoras').value, 10), hora_extra_valor: numBR($('fpAd').value), comissao_pacote: numBR($('fpCom').value), profile_id: $('fpLogin').value || null };
+      const row = { nome: nz($('fpNome').value), jornada: nz($('fpJor').value) || 'Segunda a sexta, das 8h às 18h', salario: numBR($('fpSal').value), horas_mensais: parseInt($('fpHoras').value, 10), hora_extra_valor: numBR($('fpAd').value), comissao_pacote: numBR($('fpCom').value), profile_id: $('fpLogin').value || null };
       if (row.nome.length < 2) return err('Digite o nome.');
       if (!(row.salario >= 0)) return err('Digite o salário.');
       if (!(row.horas_mensais > 0)) return err('Digite as horas por mês (ex.: 220).');
