@@ -87,7 +87,9 @@
       .subscribe();
     bgT = setInterval(() => refreshOrders(), 20000);   // rede de segurança
   }
+  let notaBusy = false;   // enquanto confirma uma nota, as atualizações automáticas não apagam a tela
   async function go(t, silent) {
+    if (silent && notaBusy) return;
     tab = t;
     document.querySelectorAll('#tabs [data-tab]').forEach((b) => b.classList.toggle('on', b.dataset.tab === t));
     if (!silent) window.scrollTo(0, 0);
@@ -675,12 +677,67 @@
       const num = Number(n.valor), okd = (x) => (/^20\d\d-\d\d-\d\d$/.test(String(x || '')) ? x : null);
       const tp = ['compra', 'despesa', 'venda'].includes(n.tipo) ? n.tipo : null;
       let cat = n.categoria; if (tp === 'venda') cat = 'venda'; else if (tp === 'compra' && !CATC[cat]) cat = 'mercadoria'; else if (tp === 'despesa' && !CATD[cat]) cat = 'outros';
-      return { valor: num > 0 ? num : null, data: okd(n.data), vencimento: tp === 'despesa' ? okd(n.vencimento) : null, fornecedor: n.fornecedor || null, cliente: n.cliente || null, categoria: tp ? cat : null, tipo: tp, descricao: n.descricao || null, peso_kg: Number(n.peso_kg) > 0 ? Number(n.peso_kg) : null, ia: true };
+      return { valor: num > 0 ? num : null, data: okd(n.data), vencimento: tp === 'despesa' ? okd(n.vencimento) : null, fornecedor: n.fornecedor || null, cliente: n.cliente || null, categoria: tp ? cat : null, tipo: tp, descricao: n.descricao || null, exato: Number(n.confianca) >= 0.9 && num > 0, peso_kg: Number(n.peso_kg) > 0 ? Number(n.peso_kg) : null, ia: true };
     } catch (e) { return null; } finally { clearTimeout(to); }
   }
   let notaUlt = '';
+  // ---------- leitura exata de boleto / conta (linha digitável tem valor e dígitos de conferência) ----------
+  const mod10 = (s) => { let soma = 0, mult = 2; for (let i = s.length - 1; i >= 0; i--) { let r = Number(s[i]) * mult; if (r > 9) r = Math.floor(r / 10) + (r % 10); soma += r; mult = mult === 2 ? 1 : 2; } return (10 - (soma % 10)) % 10; };
+  const mod11 = (s) => { let soma = 0, mult = 2; for (let i = s.length - 1; i >= 0; i--) { soma += Number(s[i]) * mult; mult = mult === 9 ? 2 : mult + 1; } const r = soma % 11; return r === 0 || r === 1 ? 0 : r === 10 ? 1 : 11 - r; };
+  const fatorData = (f) => { let t = Date.UTC(2000, 6, 3) + (f - 1000) * 864e5; while (t < Date.now() - 200 * 864e5) t += 9000 * 864e5; return new Date(t).toISOString().slice(0, 10); };
+  function parseBoleto(texto) {
+    const t = String(texto || '');
+    for (const m of t.matchAll(/\d[\d .\-]{40,70}\d/g)) {
+      const d = m[0].replace(/\D/g, '');
+      if (d.length === 47) {
+        if (mod10(d.slice(0, 9)) !== +d[9] || mod10(d.slice(10, 20)) !== +d[20] || mod10(d.slice(21, 31)) !== +d[31]) continue;
+        const valor = Number(d.slice(37)) / 100, f = Number(d.slice(33, 37));
+        if (valor > 0) return { valor, vencimento: f >= 1000 ? fatorData(f) : null, tipo: 'boleto' };
+      } else if (d.length === 48 && d[0] === '8') {
+        const modf = '67'.includes(d[2]) ? mod10 : mod11; let ok = true, b = '';
+        for (let i = 0; i < 4; i++) { const blk = d.slice(i * 12, i * 12 + 11); if (modf(blk) !== +d[i * 12 + 11]) ok = false; b += blk; }
+        if (!ok || !'67'.includes(d[2])) continue;
+        const valor = Number(b.slice(4, 15)) / 100; if (valor > 0) return { valor, vencimento: null, tipo: 'conta' };
+      }
+    }
+    return null;
+  }
+  // realça a foto (cinza + limiar local) para o leitor enxergar melhor os números
+  const realce = (file) => new Promise((res, rej) => {
+    const img = new Image(), url = URL.createObjectURL(file);
+    img.onload = () => {
+      const k = Math.min(2, 2400 / Math.max(img.width, img.height)), w = Math.round(img.width * k), h = Math.round(img.height * k), c = document.createElement('canvas'); c.width = w; c.height = h;
+      const x = c.getContext('2d'); x.drawImage(img, 0, 0, w, h); URL.revokeObjectURL(url);
+      const id = x.getImageData(0, 0, w, h), p = id.data, g = new Uint8Array(w * h), I = new Float64Array((w + 1) * (h + 1));
+      for (let i = 0; i < w * h; i++) g[i] = (p[i * 4] * 0.299 + p[i * 4 + 1] * 0.587 + p[i * 4 + 2] * 0.114) | 0;
+      for (let y = 1; y <= h; y++) { let row = 0; for (let xx = 1; xx <= w; xx++) { row += g[(y - 1) * w + xx - 1]; I[y * (w + 1) + xx] = I[(y - 1) * (w + 1) + xx] + row; } }
+      const r = Math.max(8, Math.round(Math.min(w, h) / 40));
+      for (let y = 0; y < h; y++) for (let xx = 0; xx < w; xx++) {
+        const x0 = Math.max(0, xx - r), x1 = Math.min(w, xx + r + 1), y0 = Math.max(0, y - r), y1 = Math.min(h, y + r + 1);
+        const s = I[y1 * (w + 1) + x1] - I[y0 * (w + 1) + x1] - I[y1 * (w + 1) + x0] + I[y0 * (w + 1) + x0], m = s / ((x1 - x0) * (y1 - y0)), v = g[y * w + xx] < m * 0.88 ? 0 : 255, o = (y * w + xx) * 4;
+        p[o] = p[o + 1] = p[o + 2] = v; p[o + 3] = 255;
+      }
+      x.putImageData(id, 0, 0); c.toBlob((b) => (b ? res(b) : rej(new Error('Imagem inválida.'))), 'image/png');
+    };
+    img.onerror = () => rej(new Error('Não consegui abrir a imagem.')); img.src = url;
+  });
+  async function lerFotoOCR(f) {
+    const t1 = await ocrTexto(await redim(f, 1800));
+    let d = lerNota(t1), bol = parseBoleto(t1);
+    if (!bol || !(d.valor > 0)) {
+      try {
+        const t2 = await ocrTexto(await realce(f)), d2 = lerNota(t2);
+        if (!bol) bol = parseBoleto(t2);
+        if (d2.valor != null && d.valor != null && Math.abs(d2.valor - d.valor) < 0.005) d.concorda = true;
+        for (const k of ['valor', 'data', 'fornecedor', 'vencimento', 'categoria', 'tipo', 'cliente']) if (d[k] == null) d[k] = d2[k];
+      } catch (e) { /* segue com a 1ª leitura */ }
+    }
+    if (bol) { d.valor = bol.valor; if (bol.vencimento) d.vencimento = bol.vencimento; d.exato = true; d.fonte = bol.tipo; if (!d.tipo) { d.tipo = 'despesa'; d.categoria = bol.tipo === 'boleto' ? 'boleto' : 'outros'; } }
+    return d;
+  }
   const NTIPOS = [['compra', '🛒 Compra de mercadoria'], ['despesa', '🧾 Despesa / conta / boleto'], ['venda', '💰 Venda'], ['', '🤖 Não sei (automático)']];
-  async function notaAuto(f, box, depois) {
+  async function notaAuto(f, box, depois) { notaBusy = true; try { await notaAuto0(f, box, depois); } finally { notaBusy = false; } }
+  async function notaAuto0(f, box, depois) {
     // 1) depois da foto, pergunta o que é a nota
     box.innerHTML = '<div class="card" style="border-color:var(--o)"><img src="' + URL.createObjectURL(f) + '" style="max-width:100%;max-height:200px;border-radius:10px"><h3 style="margin-top:8px">O que é esta nota?</h3><div style="display:grid;gap:8px">' + NTIPOS.map((t) => '<button type="button" class="btn' + (t[0] ? '' : ' sec') + '" data-ntipo="' + t[0] + '">' + t[1] + '</button>').join('') + '</div></div>';
     const forca = await new Promise((res) => box.querySelectorAll('[data-ntipo]').forEach((x) => { x.onclick = () => res(x.dataset.ntipo); }));
@@ -688,24 +745,30 @@
     box.innerHTML = '<div class="card"><img src="' + URL.createObjectURL(f) + '" style="max-width:100%;max-height:200px;border-radius:10px"><div class="small mut" id="ocrMsg" style="margin-top:6px">Lendo o valor da nota… (pode levar alguns segundos)</div></div>';
     let d = null;
     try { d = await lerNotaIA(f, forca); } catch (e) { d = null; }
-    if (!d) { try { d = lerNota(await ocrTexto(await redim(f, 1800))); } catch (e) { d = null; } }
+    if (!d) { try { d = await lerFotoOCR(f); } catch (e) { d = null; } }
+    d = d || { valor: null, data: null, vencimento: null, fornecedor: null, categoria: null, tipo: null, cliente: null };
     if (forca) {
-      d = d || { valor: null, data: null, vencimento: null, fornecedor: null, categoria: null, tipo: null, cliente: null };
       d.tipo = forca;
       if (forca === 'venda') { d.categoria = 'venda'; d.fornecedor = null; d.vencimento = null; }
       else if (forca === 'compra' && !CATC[d.categoria]) d.categoria = 'mercadoria';
       else if (forca === 'despesa' && !CATD[d.categoria]) d.categoria = 'outros';
       if (forca !== 'despesa') d.vencimento = null;
     }
-    if (!d || !d.tipo || !(d.valor > 0) || d.valor > 100000) {
-      if (forca === 'venda') {
-        box.innerHTML = '<div class="card"><div class="warn">Não consegui ler o valor da venda. Digite abaixo:</div><label>Valor (R$)</label><input id="nvV" inputmode="decimal"><label>Cliente (opcional)</label><input id="nvC"><div id="nvE"></div><button class="btn" id="nvOk" style="margin-top:10px">Lançar venda</button></div>';
-        $('nvOk').onclick = act(async () => { const v = numBR($('nvV').value); if (!(v > 0)) { $('nvE').innerHTML = '<div class="errbox">Digite o valor.</div>'; return; } d.valor = v; d.cliente = nz($('nvC').value) || d.cliente; await gravarNota(d, f, box, depois); });
-        return;
-      }
-      notaPend = f; notaPendD = d;
-      box.innerHTML = '<div class="warn">⚠️ Não tive certeza do valor/tipo dessa nota' + (d && d.valor > 0 ? ' (achei ' + money(d.valor) + ')' : '') + '. Abri o formulário já com o que consegui ler: confira e salve. <b>A foto fica guardada.</b></div>';
-      go('financeiro'); return;
+    // número tem que estar certo: só lança direto quando o valor foi VALIDADO (boleto/conta com dígito de conferência) ou a IA tem alta confiança; senão o Alexandre confirma o valor
+    if (!d.tipo) d.tipo = 'despesa';
+    if (!d.categoria) d.categoria = d.tipo === 'venda' ? 'venda' : d.tipo === 'compra' ? 'mercadoria' : 'outros';
+    if (!(d.exato && d.valor > 0 && d.valor <= 100000)) {
+      const rotulo = d.tipo === 'venda' ? 'Cliente' : 'Fornecedor / quem cobrou';
+      box.innerHTML = '<div class="card" style="border-color:var(--o)"><img src="' + URL.createObjectURL(f) + '" style="max-width:100%;max-height:200px;border-radius:10px"><h3 style="margin-top:8px">Confirme o valor</h3><div class="small mut">' + (d.valor > 0 ? 'Li <b>' + money(d.valor) + '</b>' + (d.concorda ? ' (duas leituras deram o mesmo número)' : '') + '. Confira com a nota e corrija se precisar.' : 'Não consegui ler o valor. Digite o total da nota:') + '</div>' +
+        '<label>Valor total (R$)</label><input id="cfV" inputmode="decimal" style="font-size:28px;font-weight:800" value="' + (d.valor > 0 ? String(d.valor.toFixed(2)).replace('.', ',') : '') + '">' +
+        '<label>' + rotulo + '</label><input id="cfF" value="' + esc((d.tipo === 'venda' ? d.cliente : d.fornecedor) || '') + '"><label>Dia</label><input id="cfD" type="date" value="' + (d.data || todayStr()) + '">' +
+        (d.tipo === 'despesa' ? '<label>Vence em (deixe vazio se já pagou)</label><input id="cfVenc" type="date" value="' + (d.vencimento || '') + '">' : '') +
+        '<div id="cfE"></div><div class="row" style="margin-top:10px"><button class="btn sec grow" id="cfNo">Cancelar</button><button class="btn grow" id="cfOk">✅ Confirmar e lançar</button></div></div>';
+      const ok = await new Promise((res) => { $('cfNo').onclick = () => res(false); $('cfOk').onclick = () => { const v = numBR($('cfV').value); if (!(v > 0)) { $('cfE').innerHTML = '<div class="errbox">Digite o valor, maior que zero.</div>'; return; } res(true); }; });
+      if (!ok) { box.innerHTML = ''; return; }
+      d.valor = numBR($('cfV').value); const tx = nz($('cfF').value) || null;
+      if (d.tipo === 'venda') d.cliente = tx; else d.fornecedor = tx;
+      d.data = $('cfD').value || todayStr(); if (d.tipo === 'despesa') d.vencimento = ($('cfVenc') && $('cfVenc').value) || null;
     }
     await gravarNota(d, f, box, depois);
   }
