@@ -196,10 +196,16 @@
       const vTot = vd.reduce((x, o) => x + Number(o.total), 0), vPac = vd.reduce((x, o) => x + o.itens_pedido.reduce((y, i) => y + i.pacotes, 0), 0);
       h = '<div class="kpi" style="margin-bottom:12px"><div><span class="small mut">💰 Vendas de hoje</span><b>' + money(vTot) + '</b></div><div><span class="small mut">Pedidos pagos hoje</span><b>' + vd.length + '</b></div><div><span class="small mut">Pacotes vendidos hoje</span><b>' + vPac + '</b></div></div>' + h;
       h = (c2.pagamento && (c2.pagamento.ativo || (c2.pagamento.manual && c2.pagamento.manual.ativo)) ? '' : '<div class="errbox">⚠️ Nenhuma forma de pagamento está ativa: os clientes ainda não conseguem finalizar compras. <a href="#" data-go="pagto" style="color:var(--y)">Configurar agora</a></div>') + h;
+      const rec = [...(await q(sb.from('despesas').select('id,descricao,valor,tipo,foto_path,created_at').not('foto_path', 'is', null).order('created_at', { ascending: false }).limit(6))).map((x) => ({ ...x, k: x.tipo === 'compra' ? 'Compra' : 'Despesa' })), ...(await q(sb.from('vendas_externas').select('id,descricao,valor,foto_path,created_at').not('foto_path', 'is', null).order('created_at', { ascending: false }).limit(6))).map((x) => ({ ...x, k: 'Venda' }))].sort((a, b) => b.created_at.localeCompare(a.created_at)).slice(0, 6);
+      const urls = rec.length ? await Promise.all(rec.map((x) => sb.storage.from('alex-notas').createSignedUrl(x.foto_path, 3600))) : [];
+      h = '<div class="card" style="border-color:var(--o)"><h3>📷 Foto da nota</h3><label class="btn" style="display:block;text-align:center;cursor:pointer;margin:8px 0">📷 Tirar foto da nota / boleto<input id="iFoto" type="file" accept="image/*" capture="environment" style="display:none"></label><div class="small mut">O sistema separa sozinho: compra de mercadoria, conta/boleto (despesa) ou nota de venda (soma nas vendas).</div><div id="iNota"></div>' +
+        (rec.length ? '<div class="small mut" style="margin-top:10px">Últimas notas lançadas</div><div class="row" style="flex-wrap:wrap;gap:8px;margin-top:6px">' + rec.map((x, i) => urls[i].data ? '<button type="button" data-nota="' + esc(x.foto_path) + '" style="background:none;border:0;padding:0;width:92px;text-align:left;color:inherit"><img src="' + esc(urls[i].data.signedUrl) + '" style="width:92px;height:92px;object-fit:cover;border-radius:10px;display:block"><span class="small" style="display:block"><b>' + x.k + '</b> ' + money(x.valor) + '</span></button>' : '').join('') + '</div>' : '') + '</div>' + h;
       if (aguardaM) h = '<div class="warn">💵 Há <b>' + aguardaM + '</b> pedido(s) esperando você confirmar o pagamento. <a href="#" data-go="todos" style="color:var(--y)">Ver agora</a></div>' + h;
       if (pend) h = '<div class="warn">Há pedidos com pendência ou reembolso para resolver. <a href="#" data-go="todos" style="color:var(--y)">Ver</a></div>' + h;
     }
     $('view').innerHTML = h;
+    if ($('iFoto')) $('iFoto').onchange = (e) => { const f = e.target.files[0]; if (f) notaAuto(f, $('iNota'), tInicio); };
+    document.querySelectorAll('#view [data-nota]').forEach((b) => { b.onclick = act(async () => { const u = await sb.storage.from('alex-notas').createSignedUrl(b.dataset.nota, 600); if (u.error) throw new Error(u.error.message); modal('<h3>Foto da nota</h3><img src="' + esc(u.data.signedUrl) + '" style="max-width:100%;border-radius:10px"><button class="btn sec" id="nFecha" style="margin-top:10px">Fechar</button>'); $('nFecha').onclick = closeModal; }); });
     if ($('cpLoja')) $('cpLoja').onclick = async () => { try { await navigator.clipboard.writeText($('lojaUrl').textContent); toast('Link copiado!', 'ok'); } catch (e) { toast('Copie o link manualmente.'); } };
   }
 
@@ -516,24 +522,26 @@
     const r = await rpc('financeiro_mes', { p_mes: ini });
     const ds = await q(sb.from('despesas').select('*').gte('data', ini).lte('data', ult).order('data', { ascending: false }));
     const prods = await q(sb.from('produtos').select('id,nome').order('nome'));
+    const vext = await q(sb.from('vendas_externas').select('*').gte('data', ini).lte('data', ult).order('data', { ascending: false }));
     const compras = ds.filter((d) => d.tipo === 'compra'), desps = ds.filter((d) => d.tipo !== 'compra');
     const liq = Number(r.liquido);
     const tabela = (lista, vazio) => lista.length ? '<div class="scroll"><table><tr><th>Dia</th><th>O que</th><th>Valor</th><th></th></tr>' + lista.map((d) => '<tr><td>' + dday(d.data) + '</td><td>' + esc(d.fornecedor ? d.fornecedor + ' — ' : '') + esc(d.descricao) + '<br><span class="mut small">' + esc(CATD[d.categoria] || CATC[d.categoria] || d.categoria) + (d.quantidade_kg ? ' • ' + String(d.quantidade_kg).replace('.', ',') + ' kg' : '') + '</span>' + (d.pago === false ? ' <span class="tag warn">A pagar' + (d.vencimento ? ' até ' + dday(d.vencimento) : '') + '</span>' : '') + '</td><td><b>' + money(d.valor) + '</b></td><td>' +
       (d.foto_path ? '<button class="btn sm sec" data-nota="' + esc(d.foto_path) + '">📎 Nota</button> ' : '') + (d.pago === false ? '<button class="btn sm green" data-fpago="' + d.id + '">Paguei</button> ' : '') + '<button class="btn sm sec" data-ddel="' + d.id + '" data-foto="' + esc(d.foto_path || '') + '">Apagar</button></td></tr>').join('') + '</table></div>' : '<div class="mut">' + vazio + '</div>';
     let h = '<h2>Financeiro</h2>' + mesPicker() +
-      '<div class="kpi" style="margin-bottom:12px"><div><span class="small mut">💰 Vendas (BRUTO)</span><b>' + money(r.bruto) + '</b><span class="small mut">' + r.pedidos + ' pedidos • ' + r.pacotes + ' pacotes</span></div>' +
+      '<div class="kpi" style="margin-bottom:12px"><div><span class="small mut">💰 Vendas (BRUTO)</span><b>' + money(r.bruto) + '</b><span class="small mut">' + r.pedidos + ' pedidos • ' + r.pacotes + ' pacotes' + (Number(r.vendas_notas) ? '<br>+ ' + money(r.vendas_notas) + ' de vendas por nota' : '') + '</span></div>' +
       '<div><span class="small mut">🛒 Compras (mercadoria)</span><b>' + money(r.compras) + '</b></div><div><span class="small mut">🧾 Despesas da loja</span><b>' + money(r.despesas) + '</b></div><div><span class="small mut">👩‍🍳 Folha</span><b>' + money(r.folha_custo) + '</b></div>' +
       '<div style="background:' + (liq >= 0 ? '#0d2d1b' : '#3a0f0b') + '"><span class="small mut">LÍQUIDO de ' + mesTxt(mesSel) + '</span><b style="color:' + (liq >= 0 ? 'var(--ok)' : 'var(--bad)') + '">' + money(liq) + '</b></div></div>' +
       '<div class="small mut" style="margin-bottom:10px"><b>Bruto</b> = tudo que as vendas pagas deram (com a taxa de entrega). <b>Líquido</b> = bruto − compras − despesas − folha de pagamento. Pedidos cancelados não entram.' + (Number(r.a_pagar) ? '<br>⚠️ Contas ainda <b>a pagar</b> neste mês: ' + money(r.a_pagar) + '.' : '') + '</div>' +
       '<div class="card" style="border-color:var(--o)"><h3>Lançar compra ou despesa</h3>' +
       '<label class="btn" style="display:block;text-align:center;cursor:pointer;margin:8px 0">📷 Tirar foto da nota / boleto<input id="fFoto" type="file" accept="image/*" capture="environment" style="display:none"></label>' +
-      '<div class="small mut" id="ocrMsg">Tire a foto e o sistema lê o valor, a data e o fornecedor. Você confere antes de salvar.</div><div id="ocrPrev"></div>' +
+      '<div class="small mut" id="ocrMsg">Tire a foto: o sistema reconhece se é compra, conta/boleto ou venda e lança sozinho. Se errar, é só tocar em Desfazer. Ou preencha à mão abaixo.</div><div id="ocrPrev"></div>' +
       '<div class="cols m1"><div><label>É uma...</label><select id="fTipo"><option value="compra">Compra de mercadoria</option><option value="despesa">Despesa da loja (conta, boleto)</option></select></div><div><label>Tipo</label><select id="fCat"></select></div></div>' +
       '<div class="cols m1"><div><label>Fornecedor / quem cobrou</label><input id="fForn" placeholder="Ex.: Frigorífico, Cemig"></div><div><label>Dia</label><input id="fData" type="date" value="' + todayStr() + '"></div></div>' +
       '<label>Descrição</label><input id="fDesc" placeholder="Ex.: 20 kg de coração"><label>Valor (R$)</label><input id="fVal" inputmode="decimal">' +
       '<div id="fCompra" class="cols m1"><div><label>Produto (opcional)</label><select id="fProd"><option value="">— nenhum —</option>' + prods.map((p) => '<option value="' + p.id + '">' + esc(p.nome) + '</option>').join('') + '</select></div><div><label>Peso comprado (kg, opcional)</label><input id="fKg" inputmode="decimal"></div></div>' +
       '<label class="row" style="margin-top:10px"><input type="checkbox" id="fPago" style="width:24px;height:24px" checked> Já está pago</label><div id="fVencBox" class="hide"><label>Vence em</label><input id="fVenc" type="date"></div>' +
       '<div id="dErr"></div><button class="btn" id="dSalvar" style="margin-top:12px">Salvar</button></div>' +
+      '<div class="card"><h3>💰 Vendas lançadas por nota <span class="tag">' + money(r.vendas_notas) + '</span></h3>' + (vext.length ? '<div class="scroll"><table><tr><th>Dia</th><th>O que</th><th>Valor</th><th></th></tr>' + vext.map((v) => '<tr><td>' + dday(v.data) + '</td><td>' + esc(v.descricao) + (v.auto ? ' <span class="tag">🤖 auto</span>' : '') + '</td><td><b>' + money(v.valor) + '</b></td><td>' + (v.foto_path ? '<button class="btn sm sec" data-nota="' + esc(v.foto_path) + '">📎 Nota</button> ' : '') + '<button class="btn sm sec" data-vdel="' + v.id + '" data-foto="' + esc(v.foto_path || '') + '">Apagar</button></td></tr>').join('') + '</table></div>' : '<div class="mut">Nenhuma venda lançada por nota. As vendas feitas pela loja online já entram sozinhas no bruto.</div>') + '</div>' +
       '<div class="card"><h3>🛒 Compras do mês <span class="tag">' + money(r.compras) + '</span></h3>' + tabela(compras, 'Nenhuma compra lançada.') + '</div>' +
       '<div class="card"><h3>🧾 Despesas do mês <span class="tag">' + money(r.despesas) + '</span></h3>' + (r.despesas_por_categoria.map((c) => '<div class="sumline"><span>' + esc(CATD[c.categoria] || c.categoria) + '</span><b>' + money(c.total) + '</b></div>').join('')) + tabela(desps, 'Nenhuma despesa lançada.') + '</div>' +
       '<div class="card"><h3>👩‍🍳 Folha do mês</h3>' + (r.folha.map((p) => '<div class="sumline"><span>' + esc(p.nome) + ' <span class="mut small">(vales ' + money(p.vales) + ')</span></span><b>' + money(p.bruto) + '</b></div>').join('') || '<div class="mut">Nenhuma funcionária na folha.</div>') + '<div class="sumline tot"><span>Custo da folha</span><span>' + money(r.folha_custo) + '</span></div><div class="small mut">A pagar no 5º dia útil (' + dday(r.pagamento_em) + '): ' + money(r.folha_liquido) + ' (já descontados os vales).</div></div>';
@@ -543,22 +551,14 @@
     $('fTipo').onchange = catSel; catSel();
     $('fPago').onchange = () => $('fVencBox').classList.toggle('hide', $('fPago').checked);
     $('mMes').onchange = (e) => { if (e.target.value) { mesSel = e.target.value; tFinanceiro(); } };
-    $('fFoto').onchange = async (e) => {
-      const f = e.target.files[0]; if (!f) return; notaFile = f;
-      $('ocrPrev').innerHTML = '<img src="' + URL.createObjectURL(f) + '" style="max-width:100%;max-height:220px;border-radius:10px;margin:8px 0">';
-      $('ocrMsg').textContent = 'Lendo a nota… (pode levar alguns segundos)';
-      try {
-        const d = lerNota(await ocrTexto(await redim(f, 1800)));
-        if (d.tipo) { $('fTipo').value = d.tipo; catSel(); }
-        if (d.categoria && $('fCat').querySelector('option[value="' + d.categoria + '"]')) $('fCat').value = d.categoria;
-        if (d.valor != null) $('fVal').value = String(d.valor.toFixed(2)).replace('.', ',');
-        if (d.data) $('fData').value = d.data;
-        if (d.fornecedor) $('fForn').value = d.fornecedor;
-        if (d.vencimento) { $('fPago').checked = false; $('fVencBox').classList.remove('hide'); $('fVenc').value = d.vencimento; }
-        const lidos = [d.valor != null ? 'valor' : null, d.data ? 'data' : null, d.fornecedor ? 'fornecedor' : null].filter(Boolean);
-        $('ocrMsg').innerHTML = lidos.length ? '✅ Li: <b>' + lidos.join(', ') + '</b>. <b>Confira os campos</b> (a leitura pode errar) e toque em Salvar. A foto fica guardada junto.' : '⚠️ Não consegui ler bem. Preencha à mão; a foto será guardada junto.';
-      } catch (err) { $('ocrMsg').textContent = '⚠️ Não consegui ler a nota (' + err.message + '). Preencha à mão; a foto será guardada junto.'; }
-    };
+    if (notaPend) {
+      notaFile = notaPend; notaPend = null;
+      $('ocrPrev').innerHTML = '<img src="' + URL.createObjectURL(notaFile) + '" style="max-width:100%;max-height:220px;border-radius:10px;margin:8px 0">';
+      if (notaPendD) { aplicarLeitura(notaPendD); notaPendD = null; }
+      $('ocrMsg').innerHTML = '⚠️ Confira os campos e toque em Salvar. A foto fica guardada junto.';
+      $('fTipo').scrollIntoView();
+    }
+    $('fFoto').onchange = (e) => { const f = e.target.files[0]; if (f) notaAuto(f, $('ocrPrev'), tFinanceiro); };
     $('dSalvar').onclick = act(async () => {
       const err = (m) => { $('dErr').innerHTML = '<div class="errbox">' + esc(m) + '</div>'; }; $('dErr').innerHTML = '';
       const v = numBR($('fVal').value), pago = $('fPago').checked;
@@ -577,6 +577,7 @@
       } catch (e) { err(e.message); }
     });
     document.querySelectorAll('[data-ddel]').forEach((b) => { b.onclick = act(async () => { if (!(await confirmBox('<h3>Apagar este lançamento?</h3>'))) return; if (b.dataset.foto) await sb.storage.from('alex-notas').remove([b.dataset.foto]); await q(sb.from('despesas').delete().eq('id', b.dataset.ddel)); tFinanceiro(); }); });
+    document.querySelectorAll('[data-vdel]').forEach((b) => { b.onclick = act(async () => { if (!(await confirmBox('<h3>Apagar esta venda?</h3>'))) return; if (b.dataset.foto) await sb.storage.from('alex-notas').remove([b.dataset.foto]); await q(sb.from('vendas_externas').delete().eq('id', b.dataset.vdel)); tFinanceiro(); }); });
     document.querySelectorAll('[data-fpago]').forEach((b) => { b.onclick = act(async () => { await q(sb.from('despesas').update({ pago: true }).eq('id', b.dataset.fpago)); toast('Marcado como pago.', 'ok'); tFinanceiro(); }); });
     document.querySelectorAll('[data-nota]').forEach((b) => { b.onclick = act(async () => { const u = await sb.storage.from('alex-notas').createSignedUrl(b.dataset.nota, 600); if (u.error) throw new Error(u.error.message); modal('<h3>Foto da nota</h3><img src="' + esc(u.data.signedUrl) + '" style="max-width:100%;border-radius:10px"><button class="btn sec" id="nFecha" style="margin-top:10px">Fechar</button>'); $('nFecha').onclick = closeModal; }); });
   }
@@ -613,15 +614,62 @@
     const ic = linhas.findIndex((l) => /cnpj/i.test(l));
     const cand = (ic > 0 ? linhas.slice(0, ic) : linhas).reverse().find((l) => /[A-Za-zÀ-ú]{4,}/.test(l) && !/(cnpj|cupom|nota|documento|fiscal|danfe)/i.test(l) && l.length < 60);
     if (cand) fornecedor = cand.replace(/[^A-Za-zÀ-ú0-9 .&\-]/g, '').trim().slice(0, 60);
-    let categoria = null, tipo = null;
-    if (/CEMIG|ENERGIA\s*EL[EÉ]TRICA|ENERGIA/.test(up)) { categoria = 'luz'; tipo = 'despesa'; if (!fornecedor || /BOLETO/.test(fornecedor.toUpperCase())) fornecedor = 'Cemig'; }
+    let categoria = null, tipo = null, cliente = null;
+    const topo = linhas.slice(0, 5).join(' ').toUpperCase();
+    if (/ESPETINHOS?\s*(DO\s*|DE\s*)?ALEX/.test(topo) || /NOTA\s*DE\s*VENDA|COMPROVANTE\s*DE\s*VENDA|RECIBO\s*DE\s*VENDA|PEDIDO\s*DE\s*VENDA/.test(up)) {
+      tipo = 'venda'; categoria = 'venda'; fornecedor = null;
+      for (const l of linhas) { const mc = l.match(/(?:cliente|destinat[aá]rio|comprador)\s*[:\-]?\s*(.{3,60})/i); if (mc) { cliente = mc[1].replace(/[^A-Za-zÀ-ú0-9 .&\-]/g, '').trim(); break; } }
+    }
+    else if (/CEMIG|ENERGIA\s*EL[EÉ]TRICA|ENERGIA/.test(up)) { categoria = 'luz'; tipo = 'despesa'; if (!fornecedor || /BOLETO/.test(fornecedor.toUpperCase())) fornecedor = 'Cemig'; }
     else if (/COPASA|SAAE|SANEAMENTO|\b[AÁ]GUA\b/.test(up)) { categoria = 'agua'; tipo = 'despesa'; }
     else if (/ALUGUEL|LOCA[CÇ][AÃ]O/.test(up)) { categoria = 'aluguel'; tipo = 'despesa'; }
     else if (/BOLETO|LINHA\s*DIGIT[AÁ]VEL|BENEFICI[AÁ]RIO/.test(up)) { categoria = 'boleto'; tipo = 'despesa'; }
     else if (/CARNE|FRANGO|CORA[CÇ][AÃ]O|BOVINO|SU[IÍ]NO|PEIXE|TIL[AÁ]PIA|LINGUI[CÇ]A|\bKG\b|FRIGOR[IÍ]FICO|A[CÇ]OUGUE/.test(up)) { categoria = 'mercadoria'; tipo = 'compra'; }
     else if (/EMBALAGEM|PALITO|BAMBU|SACO|GELO/.test(up)) { categoria = 'embalagem'; tipo = 'compra'; }
-    if (/VENCIMENTO/.test(up) && categoria && tipo === 'despesa' && !vencimento && data) vencimento = null;
-    return { valor, data, vencimento: (tipo === 'despesa' && vencimento) ? vencimento : null, fornecedor, categoria, tipo };
+    if (categoria === 'luz') fornecedor = 'Cemig';
+    else if (categoria === 'agua') fornecedor = (up.match(/COPASA|SAAE|SANEAMENTO/) || ['Conta de água'])[0].replace(/^COPASA$/, 'Copasa');
+    else if (categoria === 'boleto') { const mb = t.match(/benefici[aá]rio\s*[:\-]?\s*([^\n]{3,50})/i); fornecedor = mb ? mb[1].replace(/[^A-Za-zÀ-ú0-9 .&\-]/g, '').trim() : null; }
+    else if (fornecedor && /(total|valor|vencimento|pagar|r\$)/i.test(fornecedor)) fornecedor = null;
+    return { valor, data, vencimento: (tipo === 'despesa' && vencimento) ? vencimento : null, fornecedor, categoria, tipo, cliente };
+  }
+
+  // ---------- foto da nota: reconhece, separa e lança sozinho ----------
+  let notaPend = null, notaPendD = null;
+  const aplicarLeitura = (d) => {
+    if (!d) return;
+    if (d.tipo && d.tipo !== 'venda') { $('fTipo').value = d.tipo; $('fTipo').onchange(); }
+    if (d.categoria && $('fCat').querySelector('option[value="' + d.categoria + '"]')) $('fCat').value = d.categoria;
+    if (d.valor != null) $('fVal').value = String(d.valor.toFixed(2)).replace('.', ',');
+    if (d.data) $('fData').value = d.data;
+    if (d.fornecedor) $('fForn').value = d.fornecedor;
+    if (d.vencimento) { $('fPago').checked = false; $('fVencBox').classList.remove('hide'); $('fVenc').value = d.vencimento; }
+  };
+  async function notaAuto(f, box, depois) {
+    box.innerHTML = '<div class="card"><img src="' + URL.createObjectURL(f) + '" style="max-width:100%;max-height:200px;border-radius:10px"><div class="small mut" id="ocrMsg" style="margin-top:6px">Lendo a nota… (pode levar alguns segundos)</div></div>';
+    let d = null;
+    try { d = lerNota(await ocrTexto(await redim(f, 1800))); } catch (e) { d = null; }
+    if (!d || !d.tipo || !(d.valor > 0) || d.valor > 100000) {
+      notaPend = f; notaPendD = d;
+      box.innerHTML = '<div class="warn">⚠️ Não tive certeza do que é essa nota' + (d && d.valor > 0 ? ' (achei o valor ' + money(d.valor) + ')' : '') + '. Abri o formulário já com o que consegui ler: confira e salve. <b>A foto fica guardada.</b></div>';
+      go('financeiro'); return;
+    }
+    try {
+      const path = 'n-' + uid() + '.jpg', up = await sb.storage.from('alex-notas').upload(path, await redim(f, 1600), { contentType: 'image/jpeg' });
+      if (up.error) throw new Error('Foto: ' + up.error.message);
+      const dia = d.data || todayStr(); let tab, row, txt;
+      if (d.tipo === 'venda') {
+        tab = 'vendas_externas'; row = { data: dia, descricao: 'Venda (nota)' + (d.cliente ? ' — ' + d.cliente : ''), cliente: d.cliente || null, valor: d.valor, foto_path: path, auto: true, criado_por: me.id };
+        txt = '💰 <b>VENDA</b> de ' + money(d.valor) + (d.cliente ? ' para ' + esc(d.cliente) : '') + ' — somei nas vendas (bruto) de ' + dday(dia) + '.';
+      } else {
+        const pago = !d.vencimento; tab = 'despesas';
+        row = { tipo: d.tipo, categoria: d.categoria, descricao: nz(d.fornecedor) || (CATD[d.categoria] || CATC[d.categoria] || 'Nota'), fornecedor: d.fornecedor || null, valor: d.valor, data: dia, pago, vencimento: d.vencimento || null, foto_path: path, auto: true, criado_por: me.id };
+        txt = (d.tipo === 'compra' ? '🛒 <b>COMPRA</b> (' : '🧾 <b>DESPESA</b> (') + esc(CATD[d.categoria] || CATC[d.categoria] || d.categoria) + ') de ' + money(d.valor) + (d.fornecedor ? ' — ' + esc(d.fornecedor) : '') + (pago ? '' : ', <b>a pagar</b> até ' + dday(d.vencimento)) + ' — lancei no Financeiro em ' + dday(dia) + '.';
+      }
+      const ins = await q(sb.from(tab).insert(row).select('id'));
+      box.innerHTML = '<div class="card" style="border-color:var(--ok)">✅ ' + txt + '<div class="small mut" style="margin-top:6px">Se a leitura errou, toque em Desfazer.</div><div class="row" style="margin-top:8px"><button class="btn sm sec grow" id="nDes">Desfazer</button><button class="btn sm grow" data-go="financeiro">Ver no Financeiro</button></div></div>';
+      $('nDes').onclick = act(async () => { await q(sb.from(tab).delete().eq('id', ins[0].id)); await sb.storage.from('alex-notas').remove([path]); toast('Lançamento desfeito.', 'ok'); depois(); });
+      toast('Nota lançada automaticamente.', 'ok');
+    } catch (e) { box.innerHTML = '<div class="errbox">' + esc(e.message) + '</div>'; }
   }
 
   // ---------- admin: lucro por produto ----------
