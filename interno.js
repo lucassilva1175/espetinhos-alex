@@ -204,6 +204,7 @@
       if (pend) h = '<div class="warn">Há pedidos com pendência ou reembolso para resolver. <a href="#" data-go="todos" style="color:var(--y)">Ver</a></div>' + h;
     }
     $('view').innerHTML = h;
+    if (notaUlt && $('iNota')) $('iNota').innerHTML = '<div class="card" style="border-color:var(--ok)">✅ ' + notaUlt + '<div class="row" style="margin-top:8px"><button class="btn sm grow" data-go="financeiro">Ver / corrigir no Financeiro</button></div></div>';
     if ($('iFoto')) $('iFoto').onchange = (e) => { const f = e.target.files[0]; if (f) notaAuto(f, $('iNota'), tInicio); };
     document.querySelectorAll('#view [data-nota]').forEach((b) => { b.onclick = act(async () => { const u = await sb.storage.from('alex-notas').createSignedUrl(b.dataset.nota, 600); if (u.error) throw new Error(u.error.message); modal('<h3>Foto da nota</h3><img src="' + esc(u.data.signedUrl) + '" style="max-width:100%;border-radius:10px"><button class="btn sec" id="nFecha" style="margin-top:10px">Fechar</button>'); $('nFecha').onclick = closeModal; }); });
     if ($('cpLoja')) $('cpLoja').onclick = async () => { try { await navigator.clipboard.writeText($('lojaUrl').textContent); toast('Link copiado!', 'ok'); } catch (e) { toast('Copie o link manualmente.'); } };
@@ -644,15 +645,38 @@
     if (d.fornecedor) $('fForn').value = d.fornecedor;
     if (d.vencimento) { $('fPago').checked = false; $('fVencBox').classList.remove('hide'); $('fVenc').value = d.vencimento; }
   };
+  // o Alexandre marca o que é a nota (compra / despesa / venda) ou deixa em automático
+  let notaUlt = '';
+  const NTIPOS = [['compra', '🛒 Compra de mercadoria'], ['despesa', '🧾 Despesa / conta / boleto'], ['venda', '💰 Venda'], ['', '🤖 Não sei (automático)']];
   async function notaAuto(f, box, depois) {
-    box.innerHTML = '<div class="card"><img src="' + URL.createObjectURL(f) + '" style="max-width:100%;max-height:200px;border-radius:10px"><div class="small mut" id="ocrMsg" style="margin-top:6px">Lendo a nota… (pode levar alguns segundos)</div></div>';
+    // 1) depois da foto, pergunta o que é a nota
+    box.innerHTML = '<div class="card" style="border-color:var(--o)"><img src="' + URL.createObjectURL(f) + '" style="max-width:100%;max-height:200px;border-radius:10px"><h3 style="margin-top:8px">O que é esta nota?</h3><div style="display:grid;gap:8px">' + NTIPOS.map((t) => '<button type="button" class="btn' + (t[0] ? '' : ' sec') + '" data-ntipo="' + t[0] + '">' + t[1] + '</button>').join('') + '</div></div>';
+    const forca = await new Promise((res) => box.querySelectorAll('[data-ntipo]').forEach((x) => { x.onclick = () => res(x.dataset.ntipo); }));
+    // 2) lê o valor e lança
+    box.innerHTML = '<div class="card"><img src="' + URL.createObjectURL(f) + '" style="max-width:100%;max-height:200px;border-radius:10px"><div class="small mut" id="ocrMsg" style="margin-top:6px">Lendo o valor da nota… (pode levar alguns segundos)</div></div>';
     let d = null;
     try { d = lerNota(await ocrTexto(await redim(f, 1800))); } catch (e) { d = null; }
+    if (forca) {
+      d = d || { valor: null, data: null, vencimento: null, fornecedor: null, categoria: null, tipo: null, cliente: null };
+      d.tipo = forca;
+      if (forca === 'venda') { d.categoria = 'venda'; d.fornecedor = null; d.vencimento = null; }
+      else if (forca === 'compra' && !CATC[d.categoria]) d.categoria = 'mercadoria';
+      else if (forca === 'despesa' && !CATD[d.categoria]) d.categoria = 'outros';
+      if (forca !== 'despesa') d.vencimento = null;
+    }
     if (!d || !d.tipo || !(d.valor > 0) || d.valor > 100000) {
+      if (forca === 'venda') {
+        box.innerHTML = '<div class="card"><div class="warn">Não consegui ler o valor da venda. Digite abaixo:</div><label>Valor (R$)</label><input id="nvV" inputmode="decimal"><label>Cliente (opcional)</label><input id="nvC"><div id="nvE"></div><button class="btn" id="nvOk" style="margin-top:10px">Lançar venda</button></div>';
+        $('nvOk').onclick = act(async () => { const v = numBR($('nvV').value); if (!(v > 0)) { $('nvE').innerHTML = '<div class="errbox">Digite o valor.</div>'; return; } d.valor = v; d.cliente = nz($('nvC').value) || d.cliente; await gravarNota(d, f, box, depois); });
+        return;
+      }
       notaPend = f; notaPendD = d;
-      box.innerHTML = '<div class="warn">⚠️ Não tive certeza do que é essa nota' + (d && d.valor > 0 ? ' (achei o valor ' + money(d.valor) + ')' : '') + '. Abri o formulário já com o que consegui ler: confira e salve. <b>A foto fica guardada.</b></div>';
+      box.innerHTML = '<div class="warn">⚠️ Não tive certeza do valor/tipo dessa nota' + (d && d.valor > 0 ? ' (achei ' + money(d.valor) + ')' : '') + '. Abri o formulário já com o que consegui ler: confira e salve. <b>A foto fica guardada.</b></div>';
       go('financeiro'); return;
     }
+    await gravarNota(d, f, box, depois);
+  }
+  async function gravarNota(d, f, box, depois) {
     try {
       const path = 'n-' + uid() + '.jpg', up = await sb.storage.from('alex-notas').upload(path, await redim(f, 1600), { contentType: 'image/jpeg' });
       if (up.error) throw new Error('Foto: ' + up.error.message);
@@ -666,6 +690,7 @@
         txt = (d.tipo === 'compra' ? '🛒 <b>COMPRA</b> (' : '🧾 <b>DESPESA</b> (') + esc(CATD[d.categoria] || CATC[d.categoria] || d.categoria) + ') de ' + money(d.valor) + (d.fornecedor ? ' — ' + esc(d.fornecedor) : '') + (pago ? '' : ', <b>a pagar</b> até ' + dday(d.vencimento)) + ' — lancei no Financeiro em ' + dday(dia) + '.';
       }
       const ins = await q(sb.from(tab).insert(row).select('id'));
+      notaUlt = txt;
       box.innerHTML = '<div class="card" style="border-color:var(--ok)">✅ ' + txt + '<div class="small mut" style="margin-top:6px">Se a leitura errou, toque em Desfazer.</div><div class="row" style="margin-top:8px"><button class="btn sm sec grow" id="nDes">Desfazer</button><button class="btn sm grow" data-go="financeiro">Ver no Financeiro</button></div></div>';
       $('nDes').onclick = act(async () => { await q(sb.from(tab).delete().eq('id', ins[0].id)); await sb.storage.from('alex-notas').remove([path]); toast('Lançamento desfeito.', 'ok'); depois(); });
       toast('Nota lançada automaticamente.', 'ok');
