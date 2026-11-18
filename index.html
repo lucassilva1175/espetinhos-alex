@@ -1,0 +1,32 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<meta name="theme-color" content="#000000">
+<title>Espetinhos Alex — peça online</title>
+<meta name="description" content="Peça pacotes de espetinhos (10 por pacote) e receba em casa. Pague com Pix ou cartão.">
+<link rel="icon" type="image/png" href="logo.png">
+<link rel="apple-touch-icon" href="logo.png">
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+<header class="top">
+  <img class="logo" src="logo.png" alt="Espetinhos Alex">
+  <span class="nome">Espetinhos Alex</span>
+  <div class="sp"></div>
+  <button class="pill" id="btnLoja">Loja</button>
+  <button class="pill hide" id="btnPedidos">Meus pedidos</button>
+</header>
+<main class="wrap" id="view"><p class="mut">Carregando…</p></main>
+<div class="bar hide" id="bar"><div class="in">
+  <div class="grow" style="flex:1"><b id="barQtd"></b><div class="small mut" id="barSub"></div></div>
+  <button class="btn" style="width:auto;padding:13px 20px" id="barBtn">Ver carrinho</button>
+</div></div>
+<div id="modal"></div>
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2.45.4/dist/umd/supabase.min.js"></script>
+<script src="config.js"></script>
+<script src="lib.js"></script>
+<script src="app.js"></script>
+</body>
+</html>
