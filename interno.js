@@ -3,7 +3,7 @@
   const { sb, $, esc, money, dt, dday, rpc, q, toast, beep, uid, busy, STATUS, PGTO, REEMB, previsaoTxt, DIAS } = AX;
   const AREA = document.body.dataset.area;
   let me = null, tab = null, names = {}, products = [], ORD = [], RES = [], known = null, rtch = null, bgT = null, pollWait = null;
-  let prodIdem = null, cfgCache = null, ordFilter = 'pend', ordSearch = '', ordDay = new Date().toLocaleDateString('sv-SE');
+  let knownM = null, prodIdem = null, cfgCache = null, ordFilter = 'pend', ordSearch = '', ordDay = new Date().toLocaleDateString('sv-SE');
   const ldate = (iso) => (iso ? new Date(iso).toLocaleDateString('sv-SE') : '');
   const isAdmin = () => me && me.role === 'admin';
   const todayStr = () => new Date().toLocaleDateString('sv-SE');
@@ -104,6 +104,15 @@
       const ids = ORD.map((o) => o.id);
       RES = ids.length ? await q(sb.from('reservas').select('pedido_id,qtd,lotes(codigo,validade,produtos(nome))').in('pedido_id', ids).eq('status', 'confirmada')) : [];
     } catch (e) { return; }
+    if (isAdmin() && AREA === 'admin') {   // pedidos esperando o Alexandre confirmar o pagamento direto (Pix/dinheiro/maquininha)
+      try {
+        const mp = await q(sb.from('pedidos').select('id,numero,cliente_nome,forma_pagamento').eq('pgto_manual', true).eq('status', 'aguardando_pagamento').eq('pgto_status', 'pendente'));
+        const novosM = mp.filter((x) => knownM && !knownM.has(x.id));
+        knownM = new Set(mp.map((x) => x.id));
+        const bdt = $('bd-todos'); if (bdt) { bdt.textContent = mp.length; bdt.classList.toggle('hide', !mp.length); }
+        if (novosM.length && !first) { beep(); novosM.forEach((x) => toast('💵 Pedido #' + x.numero + ' (' + x.cliente_nome + ') aguarda confirmação: ' + x.forma_pagamento, 'ok')); }
+      } catch (e) { /* ignora */ }
+    }
     const novos = ORD.filter((o) => o.status === 'pagamento_confirmado' && known && !known.has(o.id));
     known = new Set([...(known || []), ...ORD.map((o) => o.id)]);
     if (novos.length && !first) { beep(); novos.forEach((o) => toast('🔔 Novo pedido pago: #' + o.numero + ' — ' + o.cliente_nome, 'ok')); }
@@ -181,11 +190,13 @@
       (adm ? '' : '<div class="card"><h3>Minha produção de hoje</h3>' + (mine.length ? '<div class="scroll"><table><tr><th>Hora</th><th>Produto</th><th>Lote</th><th>Pacotes</th></tr>' + mine.map((p) => '<tr><td>' + dt(p.created_at).slice(6) + '</td><td>' + esc(p.produtos.nome) + '</td><td>' + esc(p.lotes.codigo) + '</td><td><b>' + p.pacotes + '</b> <span class="mut small">(' + eq(p.pacotes, p.produtos) + ')</span></td></tr>').join('') + '</table></div>' : '<div class="mut">Você ainda não registrou produção hoje.</div>') + '</div>');
     if (isAdmin() && AREA === 'admin') {
       const c2 = await q(sb.from('config').select('pagamento').eq('id', 1).single());
+      const aguardaM = await q(sb.from('pedidos').select('id', { count: 'exact', head: true }).eq('pgto_manual', true).eq('status', 'aguardando_pagamento').eq('pgto_status', 'pendente'));
       const pend = await q(sb.from('pedidos').select('id', { count: 'exact', head: true }).or('excecao.eq.true,reembolso_status.eq.pendente'));
       const vd = await q(sb.from('pedidos').select('total, itens_pedido(pacotes)').eq('pgto_status', 'aprovado').neq('status', 'cancelado').gte('pago_em', hoje + 'T00:00:00'));
       const vTot = vd.reduce((x, o) => x + Number(o.total), 0), vPac = vd.reduce((x, o) => x + o.itens_pedido.reduce((y, i) => y + i.pacotes, 0), 0);
       h = '<div class="kpi" style="margin-bottom:12px"><div><span class="small mut">💰 Vendas de hoje</span><b>' + money(vTot) + '</b></div><div><span class="small mut">Pedidos pagos hoje</span><b>' + vd.length + '</b></div><div><span class="small mut">Pacotes vendidos hoje</span><b>' + vPac + '</b></div></div>' + h;
-      h = (c2.pagamento && c2.pagamento.ativo ? '' : '<div class="errbox">⚠️ O pagamento online <b>não está ativo</b>: os clientes ainda não conseguem finalizar compras. <a href="#" data-go="pagto" style="color:var(--y)">Configurar agora</a></div>') + h;
+      h = (c2.pagamento && (c2.pagamento.ativo || (c2.pagamento.manual && c2.pagamento.manual.ativo)) ? '' : '<div class="errbox">⚠️ Nenhuma forma de pagamento está ativa: os clientes ainda não conseguem finalizar compras. <a href="#" data-go="pagto" style="color:var(--y)">Configurar agora</a></div>') + h;
+      if (aguardaM) h = '<div class="warn">💵 Há <b>' + aguardaM + '</b> pedido(s) esperando você confirmar o pagamento. <a href="#" data-go="todos" style="color:var(--y)">Ver agora</a></div>' + h;
       if (pend) h = '<div class="warn">Há pedidos com pendência ou reembolso para resolver. <a href="#" data-go="todos" style="color:var(--y)">Ver</a></div>' + h;
     }
     $('view').innerHTML = h;
@@ -259,7 +270,7 @@
   // ---------- admin: todos os pedidos ----------
   async function tTodos(silent) {
     const rows = await q(sb.from('pedidos').select('*, itens_pedido(*)').order('numero', { ascending: false }).limit(200));
-    const pend = (o) => o.excecao || o.alerta || o.reembolso_status === 'pendente';
+    const pend = (o) => o.excecao || o.alerta || o.reembolso_status === 'pendente' || (o.pgto_manual && o.status === 'aguardando_pagamento' && o.pgto_status === 'pendente');
     const F = { pend: ['Pendências', (o) => pend(o)], aguard: ['Aguardando pgto', (o) => o.status === 'aguardando_pagamento'], and: ['Em andamento', (o) => ['pagamento_confirmado', 'em_separacao', 'pronto_entrega', 'saiu_entrega'].includes(o.status)], ent: ['Entregues', (o) => o.status === 'entregue'], canc: ['Cancelados', (o) => o.status === 'cancelado'], todos: ['Todos', () => true] };
     const s = ordSearch.toLowerCase();
     const noDia = (o) => !ordDay || ordFilter === 'pend' || ldate(o.pago_em || o.created_at) === ordDay;
@@ -275,11 +286,12 @@
       const a = o.endereco || {}, its = o.itens_pedido || [], tot = its.reduce((x, i) => x + i.pacotes, 0);
       return '<div class="card order ' + (o.status === 'cancelado' ? 'cancelado' : o.status === 'entregue' ? 'entregue' : '') + (o.excecao ? ' exc' : '') + '"><div class="row"><h3 class="grow">#' + o.numero + ' — ' + esc(o.cliente_nome) + '</h3><span class="tag y">' + esc(STATUS[o.status]) + '</span></div>' +
         '<div class="small mut">' + dt(o.created_at) + ' • Pgto: <b>' + esc(PGTO[o.pgto_status]) + '</b> • Reembolso: ' + esc(REEMB[o.reembolso_status]) + ' • ' + money(o.total) + '</div>' +
-        (o.excecao ? '<div class="errbox" style="margin:8px 0"><b>PENDÊNCIA:</b> ' + esc(o.excecao_motivo) + '</div>' : '') + (o.alerta ? '<div class="warn" style="margin:8px 0">⚠️ ' + esc(o.alerta) + '</div>' : '') + (o.cancelado_motivo ? '<div class="small mut">Motivo do cancelamento: ' + esc(o.cancelado_motivo) + '</div>' : '') +
+        (o.pgto_manual && o.status === 'aguardando_pagamento' ? '<div class="warn" style="margin:8px 0">💵 O cliente escolheu: <b>' + esc(o.forma_pagamento) + '</b>. Quando receber, toque em "Confirmar pagamento recebido".</div>' : '') + (o.excecao ? '<div class="errbox" style="margin:8px 0"><b>PENDÊNCIA:</b> ' + esc(o.excecao_motivo) + '</div>' : '') + (o.alerta ? '<div class="warn" style="margin:8px 0">⚠️ ' + esc(o.alerta) + '</div>' : '') + (o.cancelado_motivo ? '<div class="small mut">Motivo do cancelamento: ' + esc(o.cancelado_motivo) + '</div>' : '') +
         '<div class="small" style="margin-top:6px">' + its.map((i) => pk(i.pacotes) + ' • ' + esc(i.nome)).join('<br>') + '<br><span class="mut">Total ' + pk(tot) + ' (' + eqSum(its) + ')</span></div>' +
         '<div class="small mut" style="margin-top:6px">📍 ' + esc(a.rua + ', ' + a.numero + ' — ' + a.bairro + ', ' + a.cidade) + '<br>📞 <a style="color:var(--y)" target="_blank" rel="noopener" href="https://wa.me/55' + esc(String(o.cliente_tel || '').replace(/\D/g, '').replace(/^55/, '')) + '">' + esc(o.cliente_tel) + '</a> • ' + esc(o.cliente_email) + '</div>' +
         '<div class="small mut">Separação: ' + esc(nm(o.separado_por)) + ' • Saída liberada por: ' + esc(nm(o.liberado_por)) + (o.saiu_em ? ' em ' + dt(o.saiu_em) : '') + '</div>' +
         '<div class="row" style="margin-top:10px">' +
+        (o.status === 'aguardando_pagamento' && o.pgto_status !== 'aprovado' ? '<button class="btn sm green" data-x="pagar" data-id="' + o.id + '">✅ Confirmar pagamento recebido</button>' : '') +
         (o.excecao ? '<button class="btn sm" data-x="resolver" data-id="' + o.id + '">Resolver (realocar estoque)</button>' : '') +
         (o.pgto_status === 'aprovado' && ['pagamento_confirmado', 'em_separacao', 'pronto_entrega'].includes(o.status) && !o.excecao ? '<button class="btn sm sec" data-x="realocar" data-id="' + o.id + '">Realocar lotes</button>' : '') +
         (!['cancelado', 'entregue'].includes(o.status) ? '<button class="btn sm red" data-x="cancelar" data-id="' + o.id + '">Cancelar pedido</button>' : '') +
@@ -292,6 +304,11 @@
     if (silent === undefined && ordSearch) { const i = $('oSearch'); i.focus(); i.setSelectionRange(i.value.length, i.value.length); }
   }
   async function adminOrder(a, id) {
+    if (a === 'pagar') {
+      const ped = (await q(sb.from('pedidos').select('numero,total,forma_pagamento,cliente_nome').eq('id', id).single()));
+      if (!(await confirmBox('<h3>Confirmar pagamento do pedido #' + ped.numero + '?</h3><p>Cliente: <b>' + esc(ped.cliente_nome) + '</b><br>Valor: <b>' + money(ped.total) + '</b>' + (ped.forma_pagamento ? '<br>Forma: <b>' + esc(ped.forma_pagamento) + '</b>' : '') + '</p><p class="small mut">Só confirme depois de receber. O pedido vai para a fila da equipe e fica registrado que foi você que confirmou.</p>', 'Recebi, confirmar'))) return;
+      await rpc('confirmar_pagamento_manual', { p_pedido: id }); toast('Pagamento confirmado. O pedido foi para a equipe.', 'ok'); tTodos(); refreshOrders(true); return;
+    }
     if (a === 'cancelar') {
       modal('<h3>Cancelar pedido</h3><p class="mut small">As reservas de estoque serão liberadas. Se o pedido estava pago, o reembolso ficará como pendente. Mercadoria que já saiu NÃO volta ao estoque sozinha.</p><label>Motivo (obrigatório)</label><textarea id="cMot"></textarea><div id="cErr"></div><div class="row" style="margin-top:12px"><button class="btn sec grow" id="cNo">Voltar</button><button class="btn red grow" id="cOk">Cancelar pedido</button></div>');
       $('cNo').onclick = closeModal;
@@ -569,7 +586,7 @@
 
   // ---------- admin: pagamentos ----------
   async function tPagto() {
-    const c = await q(sb.from('config').select('pagamento').eq('id', 1).single()), pg = c.pagamento || {};
+    const c = await q(sb.from('config').select('pagamento').eq('id', 1).single()), pg = c.pagamento || {}, mn = pg.manual || {};
     $('view').innerHTML = '<h2>Pagamentos</h2><p class="mut">Verificando o provedor…</p>';
     let st = null, falha = '';
     try {
@@ -580,7 +597,7 @@
     const ok = (b) => (b ? '✅' : '❌');
     const pronto = st && st.token && st.token_valido && st.webhook_secret;
     $('view').innerHTML = '<h2>Pagamentos</h2>' +
-      (pg.ativo ? '<div class="okbox">Pagamento online <b>ATIVO</b>.' + (st && st.modo_teste ? ' <b>Atenção: o token parece ser de TESTE.</b>' : '') + '</div>' : '<div class="errbox"><b>Pagamento online NÃO está ativo.</b> Os clientes veem a loja, mas não conseguem finalizar compras. Nenhum pagamento é simulado.</div>') +
+      (pg.ativo ? '<div class="okbox">Pagamento online <b>ATIVO</b>.' + (st && st.modo_teste ? ' <b>Atenção: o token parece ser de TESTE.</b>' : '') + '</div>' : '<div class="warn"><b>O pagamento automático (Mercado Pago) não está ativo.</b> ' + (mn.ativo ? 'Os clientes podem comprar pelo pagamento direto abaixo.' : 'Ative o pagamento direto abaixo para a loja já aceitar pedidos.') + '</div>') +
       '<div class="card"><h3>Situação da integração (Mercado Pago)</h3>' + (falha ? '<div class="warn">' + esc(falha) + '</div>' : '<div>' + ok(st.token) + ' Token de acesso (MP_ACCESS_TOKEN) configurado<br>' + ok(st.token_valido) + ' Token aceito pelo provedor' + (st.conta ? ' (conta: ' + esc(st.conta) + ')' : '') + '<br>' + ok(st.webhook_secret) + ' Chave secreta do webhook (MP_WEBHOOK_SECRET) configurada</div>') +
       '<div class="small mut" style="margin-top:10px">URL do webhook para cadastrar no painel do Mercado Pago (evento "Pagamentos"):</div><div class="copia">' + esc(st ? st.webhook_url : AX.cfg.SUPABASE_URL + '/functions/v1/webhook') + '</div></div>' +
       '<div class="card"><h3>Formas de pagamento</h3><label>Chave pública do Mercado Pago (Public Key — usada no formulário do cartão)</label><input id="gKey" value="' + esc(pg.public_key || '') + '" placeholder="APP_USR-...">' +
@@ -588,11 +605,23 @@
       '<label class="row" style="margin-top:12px"><input type="checkbox" id="gAtivo" style="width:24px;height:24px" ' + (pg.ativo ? 'checked' : '') + '> <b>Ativar pagamento online na loja</b></label>' +
       (pronto ? '' : '<div class="warn small" style="margin-top:8px">Só é possível ativar depois que o token e o webhook estiverem configurados.</div>') + '<div id="gErr"></div><button class="btn" id="gSave" style="margin-top:12px">Salvar</button></div>' +
       '<div class="card small"><h3>Como configurar</h3>1. No Mercado Pago Developers, crie uma aplicação e copie o <b>Access Token</b> e a <b>Public Key</b>.<br>2. No Supabase › Edge Functions › Secrets, crie <b>MP_ACCESS_TOKEN</b> e <b>MP_WEBHOOK_SECRET</b> (a chave secreta gerada ao cadastrar o webhook).<br>3. Cadastre a URL do webhook acima no painel do Mercado Pago.<br>4. Volte aqui, confira os ✅ e ative. Teste primeiro com credenciais de teste.<br>O Pix e o cartão só viram "pago" quando o Mercado Pago confirma pela conexão segura (webhook assinado). O botão "já paguei" não existe.</div>';
+    $('view').insertAdjacentHTML('afterbegin', '<div class="card" style="border-color:var(--o)"><h3>💵 Pagamento direto (sem gateway)</h3><div class="small mut">O cliente escolhe como vai pagar direto para a loja. Quando você receber, abre o pedido em "Todos os pedidos" e toca em <b>Confirmar pagamento recebido</b>: ele aparece como pago e vai para a equipe.</div>' +
+      '<label class="row" style="margin-top:12px"><input type="checkbox" id="mAtivo" style="width:24px;height:24px" ' + (mn.ativo ? 'checked' : '') + '> <b>Aceitar pagamento direto</b></label>' +
+      '<label>Chave Pix da loja (celular, CPF/CNPJ, e-mail ou chave aleatória)</label><input id="mChave" value="' + esc(mn.pix_chave || '') + '"><label>Nome do titular da chave</label><input id="mNome" value="' + esc(mn.pix_nome || '') + '">' +
+      '<label class="row" style="margin-top:10px"><input type="checkbox" id="mDin" style="width:24px;height:24px" ' + (mn.dinheiro !== false ? 'checked' : '') + '> Aceitar dinheiro na entrega</label><label class="row"><input type="checkbox" id="mMaq" style="width:24px;height:24px" ' + (mn.maquininha !== false ? 'checked' : '') + '> Aceitar cartão na maquininha (na entrega)</label>' +
+      '<div id="mErr"></div><button class="btn" id="mSave" style="margin-top:12px">Salvar pagamento direto</button></div>');
+    $('mSave').onclick = act(async () => {
+      const ativo = $('mAtivo').checked, chave = nz($('mChave').value);
+      if (ativo && !chave && !$('mDin').checked && !$('mMaq').checked) { $('mErr').innerHTML = '<div class="errbox">Informe a chave Pix ou marque dinheiro/maquininha.</div>'; return; }
+      const fresh = (await q(sb.from('config').select('pagamento').eq('id', 1).single())).pagamento || {};
+      await q(sb.from('config').update({ pagamento: { ...fresh, manual: { ativo, pix_chave: chave, pix_nome: nz($('mNome').value), dinheiro: $('mDin').checked, maquininha: $('mMaq').checked } }, atualizado_em: new Date().toISOString() }).eq('id', 1));
+      toast('Pagamento direto salvo.', 'ok'); tPagto();
+    });
     $('gSave').onclick = act(async () => {
       const ativo = $('gAtivo').checked;
       if (ativo && !pronto) { $('gErr').innerHTML = '<div class="errbox">Configure o token e o webhook antes de ativar.</div>'; return; }
       if (ativo && $('gCartao').checked && !nz($('gKey').value)) { $('gErr').innerHTML = '<div class="errbox">Informe a chave pública para aceitar cartão (ou desmarque cartão).</div>'; return; }
-      await q(sb.from('config').update({ pagamento: { provedor: 'mercadopago', public_key: nz($('gKey').value), pix: $('gPix').checked, cartao: $('gCartao').checked, ativo }, atualizado_em: new Date().toISOString() }).eq('id', 1));
+      await q(sb.from('config').update({ pagamento: { provedor: 'mercadopago', public_key: nz($('gKey').value), pix: $('gPix').checked, cartao: $('gCartao').checked, ativo, manual: ((await q(sb.from('config').select('pagamento').eq('id', 1).single())).pagamento || {}).manual || {} }, atualizado_em: new Date().toISOString() }).eq('id', 1));
       toast('Salvo.', 'ok'); tPagto();
     });
   }

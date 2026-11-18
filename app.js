@@ -256,6 +256,18 @@
         return;
       }
       const vivo = o.pgto_status === 'pendente' && o.reserva_expira && new Date(o.reserva_expira) > new Date();
+      if (vivo && o.pgto_manual) {
+        const mm = (cfg.pagamento && cfg.pagamento.manual) || {};
+        let w = '<div class="okbox"><b>✅ Pedido #' + o.numero + ' recebido!</b><br>Forma de pagamento: <b>' + esc(o.forma_pagamento) + '</b>. A loja vai confirmar o pagamento e depois preparar o seu pedido.</div>' + resumo(o);
+        if (/Pix/.test(o.forma_pagamento || '')) w += '<div class="card" style="text-align:center"><h3>Faça o Pix para a loja</h3><div class="small mut">Valor: <b>' + money(o.total) + '</b></div><div class="copia" id="pixCopia">' + esc(mm.pix_chave || '') + '</div>' + (mm.pix_nome ? '<div class="small mut">Titular: ' + esc(mm.pix_nome) + '</div>' : '') + '<button class="btn" id="btnCopy" style="margin-top:8px">Copiar chave Pix</button><div class="small mut" style="margin-top:8px">Depois de pagar, avise a loja pelo WhatsApp. O pedido aparece como pago assim que a loja confirmar.</div></div>';
+        else w += '<div class="card">Tenha o valor de <b>' + money(o.total) + '</b> em mãos na hora da entrega.</div>';
+        if (cfg.whatsapp) w += '<a class="btn sec" style="margin-bottom:10px" target="_blank" rel="noopener" href="https://wa.me/55' + esc(String(cfg.whatsapp).replace(/\D/g, '').replace(/^55/, '')) + '">Falar com a loja no WhatsApp</a>';
+        w += '<button class="btn sec" id="btnTroca">Trocar forma de pagamento</button><button class="btn sec" style="margin-top:10px" data-act="pedidos">Ver meus pedidos</button>';
+        $('view').innerHTML = w;
+        if ($('btnCopy')) $('btnCopy').onclick = async () => { try { await navigator.clipboard.writeText($('pixCopia').textContent); toast('Chave Pix copiada!', 'ok'); } catch (e) { toast('Toque e segure a chave para copiar.'); } };
+        $('btnTroca').onclick = () => { o.pgto_manual = false; paint(); };
+        startPoll(); return;
+      }
       if (!vivo) {
         const motivo = o.pgto_status === 'recusado' ? 'O pagamento foi recusado.' : 'O tempo para pagar acabou e a reserva dos pacotes foi liberada.';
         $('view').innerHTML = '<div class="errbox">' + motivo + ' Você pode tentar de novo: vamos reservar os pacotes outra vez, se ainda houver estoque.</div>' + resumo(o) +
@@ -264,7 +276,7 @@
         $('btnCancel').onclick = (ev) => busy(ev.target, async () => { if (!confirm('Cancelar este pedido?')) return; try { await rpc('cancelar_pedido_publico', { p_pedido: id, p_token: tokOf(id) }); go('pedidos'); } catch (e) { toast(e.message, 'err'); } });
         startPoll(); return;
       }
-      const pg = cfg.pagamento || {};
+      const pg = cfg.pagamento || {}, mm0 = pg.manual || {};
       h += '<h2>Pagamento</h2><div class="card" style="border-color:var(--o)"><b>⏱ Pacotes reservados por <span id="clock"></span></b><div class="small mut">Pague neste prazo para garantir o seu pedido.</div></div>' + resumo(o) + '<div id="payErr"></div>';
       const p0 = o.pagamento;
       if (pixInfo || (p0 && p0.metodo === 'pix' && p0.status === 'pendente' && p0.pix_copia)) {
@@ -275,8 +287,11 @@
           '<button class="btn sec" id="btnOutro">Escolher outra forma de pagamento</button>';
       } else {
         h += '<div class="card"><h3>Como você quer pagar?</h3>' +
-          (pg.pix ? '<button class="btn" id="btnPix" style="margin-bottom:10px">Pagar com Pix</button>' : '') +
-          (pg.cartao ? '<button class="btn sec" id="btnCartao">Pagar com cartão</button>' : '') + '<div id="cardBox"></div></div>';
+          (pg.ativo && pg.pix ? '<button class="btn" id="btnPix" style="margin-bottom:10px">Pagar com Pix (automático)</button>' : '') +
+          (pg.ativo && pg.cartao ? '<button class="btn sec" id="btnCartao" style="margin-bottom:10px">Pagar com cartão</button>' : '') +
+          (mm0.ativo && mm0.pix_chave ? '<button class="btn" data-mf="pix" style="margin-bottom:10px">Pix direto para a loja</button>' : '') +
+          (mm0.ativo && mm0.dinheiro ? '<button class="btn sec" data-mf="dinheiro" style="margin-bottom:10px">Dinheiro na entrega</button>' : '') +
+          (mm0.ativo && mm0.maquininha ? '<button class="btn sec" data-mf="maquininha" style="margin-bottom:10px">Cartão na maquininha (na entrega)</button>' : '') + '<div id="cardBox"></div></div>';
       }
       h += '<button class="btn sec" style="margin-top:10px" data-act="pedidos">Ver meus pedidos</button>';
       $('view').innerHTML = h;
@@ -289,6 +304,7 @@
         catch (e) { $('payErr').innerHTML = '<div class="errbox">' + esc(e.message) + '</div>'; }
       });
       if ($('btnCartao')) $('btnCartao').onclick = () => openCard(id, o);
+      document.querySelectorAll('[data-mf]').forEach((b) => { b.onclick = (ev) => busy(ev.target, async () => { try { await rpc('escolher_pagamento_manual', { p_pedido: id, p_token: tokOf(id), p_forma: b.dataset.mf }); o = await obterPed(id); paint(); } catch (e) { $('payErr').innerHTML = '<div class="errbox">' + esc(e.message) + '</div>'; } }); });
       startPoll();
     };
     function startPoll() {
