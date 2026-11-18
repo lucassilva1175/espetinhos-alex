@@ -68,7 +68,7 @@
 
   // ---------- estrutura ----------
   const TABS_EQ = [['inicio', '🏠 Início'], ['pedidos', '📦 Pedidos'], ['producao', '➕ Produzir'], ['estoque', '❄️ Câmara fria'], ['salario', '💵 Salário']];
-  const TABS_AD = [['inicio', '🏠 Início'], ['pedidos', '📦 Fila'], ['todos', '🧾 Todos os pedidos'], ['estoque', '❄️ Câmara fria'], ['produtos', '🍢 Produtos'], ['equipe', '👥 Equipe'], ['usuarios', '🔑 Senhas'], ['folha', '👩‍🍳 Folha'], ['financeiro', '💰 Financeiro'], ['entrega', '🚚 Entrega'], ['pagto', '💳 Pagamentos'], ['relat', '📊 Relatórios']];
+  const TABS_AD = [['inicio', '🏠 Início'], ['pedidos', '📦 Fila'], ['todos', '🧾 Todos os pedidos'], ['estoque', '❄️ Câmara fria'], ['produtos', '🍢 Produtos'], ['equipe', '👥 Equipe'], ['usuarios', '🔑 Senhas'], ['folha', '👩‍🍳 Folha'], ['financeiro', '💰 Financeiro'], ['lucro', '📈 Lucro por produto'], ['entrega', '🚚 Entrega'], ['pagto', '💳 Pagamentos'], ['relat', '📊 Relatórios']];
   async function start() {
     const list = AREA === 'admin' ? TABS_AD : TABS_EQ;
     $('tabs').classList.remove('hide');
@@ -92,7 +92,7 @@
     document.querySelectorAll('#tabs [data-tab]').forEach((b) => b.classList.toggle('on', b.dataset.tab === t));
     if (!silent) window.scrollTo(0, 0);
     try {
-      const fn = { inicio: tInicio, pedidos: tPedidos, producao: tProducao, estoque: tEstoque, todos: tTodos, produtos: tProdutos, equipe: tEquipe, usuarios: tUsuarios, salario: tSalario, folha: tFolha, financeiro: tFinanceiro, entrega: tEntrega, pagto: tPagto, relat: tRelat }[t];
+      const fn = { inicio: tInicio, pedidos: tPedidos, producao: tProducao, estoque: tEstoque, todos: tTodos, produtos: tProdutos, equipe: tEquipe, usuarios: tUsuarios, salario: tSalario, folha: tFolha, financeiro: tFinanceiro, lucro: tLucro, entrega: tEntrega, pagto: tPagto, relat: tRelat }[t];
       await fn();
     } catch (e) { $('view').innerHTML = '<div class="errbox">' + esc(e.message) + '</div>'; }
   }
@@ -515,27 +515,162 @@
     const ini = mesSel + '-01', ult = new Date(Number(mesSel.slice(0, 4)), Number(mesSel.slice(5, 7)), 0).toLocaleDateString('sv-SE');
     const r = await rpc('financeiro_mes', { p_mes: ini });
     const ds = await q(sb.from('despesas').select('*').gte('data', ini).lte('data', ult).order('data', { ascending: false }));
-    const lucro = Number(r.lucro);
+    const prods = await q(sb.from('produtos').select('id,nome').order('nome'));
+    const compras = ds.filter((d) => d.tipo === 'compra'), desps = ds.filter((d) => d.tipo !== 'compra');
+    const liq = Number(r.liquido);
+    const tabela = (lista, vazio) => lista.length ? '<div class="scroll"><table><tr><th>Dia</th><th>O que</th><th>Valor</th><th></th></tr>' + lista.map((d) => '<tr><td>' + dday(d.data) + '</td><td>' + esc(d.fornecedor ? d.fornecedor + ' — ' : '') + esc(d.descricao) + '<br><span class="mut small">' + esc(CATD[d.categoria] || CATC[d.categoria] || d.categoria) + (d.quantidade_kg ? ' • ' + String(d.quantidade_kg).replace('.', ',') + ' kg' : '') + '</span>' + (d.pago === false ? ' <span class="tag warn">A pagar' + (d.vencimento ? ' até ' + dday(d.vencimento) : '') + '</span>' : '') + '</td><td><b>' + money(d.valor) + '</b></td><td>' +
+      (d.foto_path ? '<button class="btn sm sec" data-nota="' + esc(d.foto_path) + '">📎 Nota</button> ' : '') + (d.pago === false ? '<button class="btn sm green" data-fpago="' + d.id + '">Paguei</button> ' : '') + '<button class="btn sm sec" data-ddel="' + d.id + '" data-foto="' + esc(d.foto_path || '') + '">Apagar</button></td></tr>').join('') + '</table></div>' : '<div class="mut">' + vazio + '</div>';
     let h = '<h2>Financeiro</h2>' + mesPicker() +
-      '<div class="kpi" style="margin-bottom:12px"><div><span class="small mut">💰 Vendas do mês</span><b>' + money(r.receita) + '</b><span class="small mut">' + r.pedidos + ' pedidos • ' + r.pacotes + ' pacotes</span></div>' +
-      '<div><span class="small mut">Despesas (mercadoria, gastos…)</span><b>' + money(r.despesas) + '</b></div><div><span class="small mut">Folha (salários + extras)</span><b>' + money(r.folha_custo) + '</b></div>' +
-      '<div style="background:' + (lucro >= 0 ? '#0d2d1b' : '#3a0f0b') + '"><span class="small mut">LUCRO de ' + mesTxt(mesSel) + '</span><b style="color:' + (lucro >= 0 ? 'var(--ok)' : 'var(--bad)') + '">' + money(lucro) + '</b></div></div>' +
-      '<div class="small mut" style="margin-bottom:10px">Lucro = vendas (com a taxa de entrega) − despesas lançadas − folha de pagamento do mês. Pedidos cancelados não entram.</div>' +
-      '<div class="card"><h3>Lançar despesa / gasto</h3><div class="cols m1"><div><label>Dia</label><input id="dData" type="date" value="' + todayStr() + '"></div><div><label>Tipo</label><select id="dCat">' + Object.keys(CATS).map((k) => '<option value="' + k + '">' + CATS[k] + '</option>').join('') + '</select></div></div>' +
-      '<label>Descrição</label><input id="dDesc" placeholder="Ex.: 20 kg de carne de porco"><label>Valor (R$)</label><input id="dVal" inputmode="decimal"><div id="dErr"></div><button class="btn" id="dSalvar" style="margin-top:12px">Lançar despesa</button></div>' +
-      '<div class="card"><h3>Despesas de ' + mesTxt(mesSel) + '</h3>' + (r.despesas_por_categoria.length ? r.despesas_por_categoria.map((c) => '<div class="sumline"><span>' + esc(CATS[c.categoria]) + '</span><b>' + money(c.total) + '</b></div>').join('') + '<div class="sumline tot"><span>Total</span><span>' + money(r.despesas) + '</span></div>' : '<div class="mut">Nenhuma despesa lançada neste mês.</div>') +
-      (ds.length ? '<div class="scroll" style="margin-top:10px"><table><tr><th>Dia</th><th>Tipo</th><th>Descrição</th><th>Valor</th><th></th></tr>' + ds.map((d) => '<tr><td>' + dday(d.data) + '</td><td>' + esc(CATS[d.categoria]) + '</td><td>' + esc(d.descricao) + '</td><td>' + money(d.valor) + '</td><td><button class="btn sm sec" data-ddel="' + d.id + '">Apagar</button></td></tr>').join('') + '</table></div>' : '') + '</div>' +
-      '<div class="card"><h3>Folha de pagamento do mês</h3>' + (r.folha.map((p) => '<div class="sumline"><span>' + esc(p.nome) + ' <span class="mut small">(vales ' + money(p.vales) + ')</span></span><b>' + money(p.bruto) + '</b></div>').join('') || '<div class="mut">Nenhuma funcionária na folha.</div>') + '<div class="sumline tot"><span>Custo da folha</span><span>' + money(r.folha_custo) + '</span></div><div class="small mut">A pagar no 5º dia útil (' + dday(r.pagamento_em) + '): ' + money(r.folha_liquido) + ' (já descontados os vales).</div></div>';
+      '<div class="kpi" style="margin-bottom:12px"><div><span class="small mut">💰 Vendas (BRUTO)</span><b>' + money(r.bruto) + '</b><span class="small mut">' + r.pedidos + ' pedidos • ' + r.pacotes + ' pacotes</span></div>' +
+      '<div><span class="small mut">🛒 Compras (mercadoria)</span><b>' + money(r.compras) + '</b></div><div><span class="small mut">🧾 Despesas da loja</span><b>' + money(r.despesas) + '</b></div><div><span class="small mut">👩‍🍳 Folha</span><b>' + money(r.folha_custo) + '</b></div>' +
+      '<div style="background:' + (liq >= 0 ? '#0d2d1b' : '#3a0f0b') + '"><span class="small mut">LÍQUIDO de ' + mesTxt(mesSel) + '</span><b style="color:' + (liq >= 0 ? 'var(--ok)' : 'var(--bad)') + '">' + money(liq) + '</b></div></div>' +
+      '<div class="small mut" style="margin-bottom:10px"><b>Bruto</b> = tudo que as vendas pagas deram (com a taxa de entrega). <b>Líquido</b> = bruto − compras − despesas − folha de pagamento. Pedidos cancelados não entram.' + (Number(r.a_pagar) ? '<br>⚠️ Contas ainda <b>a pagar</b> neste mês: ' + money(r.a_pagar) + '.' : '') + '</div>' +
+      '<div class="card" style="border-color:var(--o)"><h3>Lançar compra ou despesa</h3>' +
+      '<label class="btn" style="display:block;text-align:center;cursor:pointer;margin:8px 0">📷 Tirar foto da nota / boleto<input id="fFoto" type="file" accept="image/*" capture="environment" style="display:none"></label>' +
+      '<div class="small mut" id="ocrMsg">Tire a foto e o sistema lê o valor, a data e o fornecedor. Você confere antes de salvar.</div><div id="ocrPrev"></div>' +
+      '<div class="cols m1"><div><label>É uma...</label><select id="fTipo"><option value="compra">Compra de mercadoria</option><option value="despesa">Despesa da loja (conta, boleto)</option></select></div><div><label>Tipo</label><select id="fCat"></select></div></div>' +
+      '<div class="cols m1"><div><label>Fornecedor / quem cobrou</label><input id="fForn" placeholder="Ex.: Frigorífico, Cemig"></div><div><label>Dia</label><input id="fData" type="date" value="' + todayStr() + '"></div></div>' +
+      '<label>Descrição</label><input id="fDesc" placeholder="Ex.: 20 kg de coração"><label>Valor (R$)</label><input id="fVal" inputmode="decimal">' +
+      '<div id="fCompra" class="cols m1"><div><label>Produto (opcional)</label><select id="fProd"><option value="">— nenhum —</option>' + prods.map((p) => '<option value="' + p.id + '">' + esc(p.nome) + '</option>').join('') + '</select></div><div><label>Peso comprado (kg, opcional)</label><input id="fKg" inputmode="decimal"></div></div>' +
+      '<label class="row" style="margin-top:10px"><input type="checkbox" id="fPago" style="width:24px;height:24px" checked> Já está pago</label><div id="fVencBox" class="hide"><label>Vence em</label><input id="fVenc" type="date"></div>' +
+      '<div id="dErr"></div><button class="btn" id="dSalvar" style="margin-top:12px">Salvar</button></div>' +
+      '<div class="card"><h3>🛒 Compras do mês <span class="tag">' + money(r.compras) + '</span></h3>' + tabela(compras, 'Nenhuma compra lançada.') + '</div>' +
+      '<div class="card"><h3>🧾 Despesas do mês <span class="tag">' + money(r.despesas) + '</span></h3>' + (r.despesas_por_categoria.map((c) => '<div class="sumline"><span>' + esc(CATD[c.categoria] || c.categoria) + '</span><b>' + money(c.total) + '</b></div>').join('')) + tabela(desps, 'Nenhuma despesa lançada.') + '</div>' +
+      '<div class="card"><h3>👩‍🍳 Folha do mês</h3>' + (r.folha.map((p) => '<div class="sumline"><span>' + esc(p.nome) + ' <span class="mut small">(vales ' + money(p.vales) + ')</span></span><b>' + money(p.bruto) + '</b></div>').join('') || '<div class="mut">Nenhuma funcionária na folha.</div>') + '<div class="sumline tot"><span>Custo da folha</span><span>' + money(r.folha_custo) + '</span></div><div class="small mut">A pagar no 5º dia útil (' + dday(r.pagamento_em) + '): ' + money(r.folha_liquido) + ' (já descontados os vales).</div></div>';
     $('view').innerHTML = h;
+    notaFile = null;
+    const catSel = () => { const c = $('fTipo').value === 'compra' ? CATC : CATD; $('fCat').innerHTML = Object.keys(c).map((k) => '<option value="' + k + '">' + c[k] + '</option>').join(''); $('fCompra').classList.toggle('hide', $('fTipo').value !== 'compra'); };
+    $('fTipo').onchange = catSel; catSel();
+    $('fPago').onchange = () => $('fVencBox').classList.toggle('hide', $('fPago').checked);
     $('mMes').onchange = (e) => { if (e.target.value) { mesSel = e.target.value; tFinanceiro(); } };
+    $('fFoto').onchange = async (e) => {
+      const f = e.target.files[0]; if (!f) return; notaFile = f;
+      $('ocrPrev').innerHTML = '<img src="' + URL.createObjectURL(f) + '" style="max-width:100%;max-height:220px;border-radius:10px;margin:8px 0">';
+      $('ocrMsg').textContent = 'Lendo a nota… (pode levar alguns segundos)';
+      try {
+        const d = lerNota(await ocrTexto(await redim(f, 1800)));
+        if (d.tipo) { $('fTipo').value = d.tipo; catSel(); }
+        if (d.categoria && $('fCat').querySelector('option[value="' + d.categoria + '"]')) $('fCat').value = d.categoria;
+        if (d.valor != null) $('fVal').value = String(d.valor.toFixed(2)).replace('.', ',');
+        if (d.data) $('fData').value = d.data;
+        if (d.fornecedor) $('fForn').value = d.fornecedor;
+        if (d.vencimento) { $('fPago').checked = false; $('fVencBox').classList.remove('hide'); $('fVenc').value = d.vencimento; }
+        const lidos = [d.valor != null ? 'valor' : null, d.data ? 'data' : null, d.fornecedor ? 'fornecedor' : null].filter(Boolean);
+        $('ocrMsg').innerHTML = lidos.length ? '✅ Li: <b>' + lidos.join(', ') + '</b>. <b>Confira os campos</b> (a leitura pode errar) e toque em Salvar. A foto fica guardada junto.' : '⚠️ Não consegui ler bem. Preencha à mão; a foto será guardada junto.';
+      } catch (err) { $('ocrMsg').textContent = '⚠️ Não consegui ler a nota (' + err.message + '). Preencha à mão; a foto será guardada junto.'; }
+    };
     $('dSalvar').onclick = act(async () => {
-      const err = (m) => { $('dErr').innerHTML = '<div class="errbox">' + esc(m) + '</div>'; };
-      const v = numBR($('dVal').value);
-      if (nz($('dDesc').value).length < 2) return err('Escreva o que foi comprado/pago.');
-      if (!(v > 0)) return err('Digite um valor maior que zero.');
-      try { await q(sb.from('despesas').insert({ data: $('dData').value || todayStr(), categoria: $('dCat').value, descricao: nz($('dDesc').value), valor: v, criado_por: me.id })); toast('Despesa lançada.', 'ok'); tFinanceiro(); } catch (e) { err(e.message); }
+      const err = (m) => { $('dErr').innerHTML = '<div class="errbox">' + esc(m) + '</div>'; }; $('dErr').innerHTML = '';
+      const v = numBR($('fVal').value), pago = $('fPago').checked;
+      if (nz($('fDesc').value).length < 2 && nz($('fForn').value).length < 2) return err('Escreva a descrição ou o fornecedor.');
+      if (!(v > 0)) return err('Digite o valor, maior que zero.');
+      if (!pago && !$('fVenc').value) return err('Informe quando vence.');
+      try {
+        let foto_path = null;
+        if (notaFile) {
+          const path = 'n-' + uid() + '.jpg', up = await sb.storage.from('alex-notas').upload(path, await redim(notaFile, 1600), { contentType: 'image/jpeg' });
+          if (up.error) throw new Error('Foto: ' + up.error.message); foto_path = path;
+        }
+        const tipo = $('fTipo').value, kg = numBR($('fKg').value);
+        await q(sb.from('despesas').insert({ tipo, categoria: $('fCat').value, descricao: nz($('fDesc').value) || nz($('fForn').value), fornecedor: nz($('fForn').value) || null, valor: v, data: $('fData').value || todayStr(), pago, vencimento: pago ? null : $('fVenc').value, produto_id: tipo === 'compra' && $('fProd').value ? $('fProd').value : null, quantidade_kg: tipo === 'compra' && kg > 0 ? kg : null, foto_path, criado_por: me.id }));
+        toast('Lançado.', 'ok'); tFinanceiro();
+      } catch (e) { err(e.message); }
     });
-    document.querySelectorAll('[data-ddel]').forEach((b) => { b.onclick = act(async () => { if (!(await confirmBox('<h3>Apagar esta despesa?</h3>'))) return; await q(sb.from('despesas').delete().eq('id', b.dataset.ddel)); tFinanceiro(); }); });
+    document.querySelectorAll('[data-ddel]').forEach((b) => { b.onclick = act(async () => { if (!(await confirmBox('<h3>Apagar este lançamento?</h3>'))) return; if (b.dataset.foto) await sb.storage.from('alex-notas').remove([b.dataset.foto]); await q(sb.from('despesas').delete().eq('id', b.dataset.ddel)); tFinanceiro(); }); });
+    document.querySelectorAll('[data-fpago]').forEach((b) => { b.onclick = act(async () => { await q(sb.from('despesas').update({ pago: true }).eq('id', b.dataset.fpago)); toast('Marcado como pago.', 'ok'); tFinanceiro(); }); });
+    document.querySelectorAll('[data-nota]').forEach((b) => { b.onclick = act(async () => { const u = await sb.storage.from('alex-notas').createSignedUrl(b.dataset.nota, 600); if (u.error) throw new Error(u.error.message); modal('<h3>Foto da nota</h3><img src="' + esc(u.data.signedUrl) + '" style="max-width:100%;border-radius:10px"><button class="btn sec" id="nFecha" style="margin-top:10px">Fechar</button>'); $('nFecha').onclick = closeModal; }); });
+  }
+  let notaFile = null;
+  const CATC = { mercadoria: 'Mercadoria (carne, frango…)', embalagem: 'Embalagem, palito, gelo' };
+  const CATD = { luz: 'Luz (Cemig)', agua: 'Água', aluguel: 'Aluguel', boleto: 'Boleto', transporte: 'Transporte / combustível', manutencao: 'Manutenção', impostos: 'Impostos e taxas', outros: 'Outros' };
+  Object.assign(CATD, { energia_agua: 'Energia e água' });
+  const redim = (file, max) => new Promise((res, rej) => {
+    const img = new Image(), url = URL.createObjectURL(file);
+    img.onload = () => { const k = Math.min(1, max / Math.max(img.width, img.height)), c = document.createElement('canvas'); c.width = Math.round(img.width * k); c.height = Math.round(img.height * k); c.getContext('2d').drawImage(img, 0, 0, c.width, c.height); URL.revokeObjectURL(url); c.toBlob((b) => (b ? res(b) : rej(new Error('Imagem inválida.'))), 'image/jpeg', 0.9); };
+    img.onerror = () => rej(new Error('Não consegui abrir a imagem.')); img.src = url;
+  });
+  // leitura automática da nota (OCR no próprio aparelho, sem enviar a foto para terceiros)
+  const loadTess = () => new Promise((res, rej) => {
+    if (window.Tesseract) return res();
+    const sc = document.createElement('script'); sc.src = 'https://cdn.jsdelivr.net/npm/tesseract.js@5.1.1/dist/tesseract.min.js'; sc.onload = res; sc.onerror = () => rej(new Error('leitor indisponível')); document.head.appendChild(sc);
+  });
+  async function ocrTexto(blob) {
+    await loadTess();
+    const { data } = await window.Tesseract.recognize(blob, 'por', { logger: (m) => { const el = $('ocrMsg'); if (el && m.status === 'recognizing text') el.textContent = 'Lendo a nota… ' + Math.round((m.progress || 0) * 100) + '%'; } });
+    return data.text || '';
+  }
+  function lerNota(texto) {
+    const t = String(texto || ''), linhas = t.split(/\n/).map((x) => x.trim()).filter(Boolean), up = t.toUpperCase();
+    const reg = /(\d{1,3}(?:\.\d{3})*,\d{2})/g, num = (x) => Number(x.replace(/\./g, '').replace(',', '.'));
+    let valor = null;
+    for (const l of linhas) { if (/(valor\s*(total|a\s*pagar|do\s*documento|cobrado)|total\s*(a\s*pagar|geral|da\s*nota|r\$)?|a\s*pagar)/i.test(l)) { const m = [...l.matchAll(reg)].pop(); if (m) valor = num(m[1]); } }
+    if (valor == null) { const todos = [...t.matchAll(reg)].map((m) => num(m[1])).filter((v) => v > 0 && v < 1e6); if (todos.length) valor = Math.max(...todos); }
+    let data = null; const md = t.match(/(\d{2})[\/.\-](\d{2})[\/.\-](20\d{2})/);
+    if (md && Number(md[2]) >= 1 && Number(md[2]) <= 12 && Number(md[1]) >= 1 && Number(md[1]) <= 31) data = md[3] + '-' + md[2] + '-' + md[1];
+    let vencimento = null; const mv = t.match(/vencimento[^\d]{0,12}(\d{2})[\/.\-](\d{2})[\/.\-](20\d{2})/i);
+    if (mv) vencimento = mv[3] + '-' + mv[2] + '-' + mv[1];
+    let fornecedor = null;
+    const ic = linhas.findIndex((l) => /cnpj/i.test(l));
+    const cand = (ic > 0 ? linhas.slice(0, ic) : linhas).reverse().find((l) => /[A-Za-zÀ-ú]{4,}/.test(l) && !/(cnpj|cupom|nota|documento|fiscal|danfe)/i.test(l) && l.length < 60);
+    if (cand) fornecedor = cand.replace(/[^A-Za-zÀ-ú0-9 .&\-]/g, '').trim().slice(0, 60);
+    let categoria = null, tipo = null;
+    if (/CEMIG|ENERGIA\s*EL[EÉ]TRICA|ENERGIA/.test(up)) { categoria = 'luz'; tipo = 'despesa'; if (!fornecedor || /BOLETO/.test(fornecedor.toUpperCase())) fornecedor = 'Cemig'; }
+    else if (/COPASA|SAAE|SANEAMENTO|\b[AÁ]GUA\b/.test(up)) { categoria = 'agua'; tipo = 'despesa'; }
+    else if (/ALUGUEL|LOCA[CÇ][AÃ]O/.test(up)) { categoria = 'aluguel'; tipo = 'despesa'; }
+    else if (/BOLETO|LINHA\s*DIGIT[AÁ]VEL|BENEFICI[AÁ]RIO/.test(up)) { categoria = 'boleto'; tipo = 'despesa'; }
+    else if (/CARNE|FRANGO|CORA[CÇ][AÃ]O|BOVINO|SU[IÍ]NO|PEIXE|TIL[AÁ]PIA|LINGUI[CÇ]A|\bKG\b|FRIGOR[IÍ]FICO|A[CÇ]OUGUE/.test(up)) { categoria = 'mercadoria'; tipo = 'compra'; }
+    else if (/EMBALAGEM|PALITO|BAMBU|SACO|GELO/.test(up)) { categoria = 'embalagem'; tipo = 'compra'; }
+    if (/VENCIMENTO/.test(up) && categoria && tipo === 'despesa' && !vencimento && data) vencimento = null;
+    return { valor, data, vencimento: (tipo === 'despesa' && vencimento) ? vencimento : null, fornecedor, categoria, tipo };
+  }
+
+  // ---------- admin: lucro por produto ----------
+  async function tLucro() {
+    const ini = mesSel + '-01', ult = new Date(Number(mesSel.slice(0, 4)), Number(mesSel.slice(5, 7)), 0).toLocaleDateString('sv-SE');
+    const r = await rpc('lucro_produtos', { p_ini: ini, p_fim: ult });
+    const lista = r.produtos.filter((p) => p.ativo);
+    const sem = lista.filter((p) => p.custo_mercadoria == null).length;
+    let h = '<h2>Lucro por produto</h2>' + mesPicker() + '<div class="kpi" style="margin-bottom:10px"><div><span class="small mut">Vendido no mês</span><b>' + money(r.receita_total) + '</b></div><div style="background:' + (Number(r.lucro_total) >= 0 ? '#0d2d1b' : '#3a0f0b') + '"><span class="small mut">Lucro dos produtos vendidos</span><b style="color:' + (Number(r.lucro_total) >= 0 ? 'var(--ok)' : 'var(--bad)') + '">' + money(r.lucro_total) + '</b></div></div>' +
+      '<div class="small mut" style="margin-bottom:10px">Lucro do pacote = preço − custo da mercadoria − comissão (' + money(r.comissao_pacote) + ' por pacote). O custo considera a <b>perda na limpeza</b> (ex.: comprou 20 kg e sobraram 15 kg).' + (sem ? '<br>⚠️ ' + sem + ' produto(s) ainda sem custo cadastrado: o lucro deles não entra na conta.' : '') + '</div>';
+    h += lista.map((p) => {
+      const ct = p.custo_mercadoria != null, m = p.margem_pct == null ? null : Number(p.margem_pct);
+      const tag = !ct ? '<span class="tag warn">Sem custo</span>' : m < 0 ? '<span class="tag bad">PREJUÍZO</span>' : m < 20 ? '<span class="tag warn">Margem baixa</span>' : '<span class="tag ok">Dá lucro</span>';
+      return '<div class="card"><div class="row"><h3 class="grow">' + esc(p.nome) + '</h3>' + tag + '</div><div class="sumline"><span>Preço do pacote</span><b>' + money(p.preco_pacote) + '</b></div>' +
+        (ct ? '<div class="sumline"><span>Custo da mercadoria</span><span>' + money(p.custo_mercadoria) + '</span></div><div class="sumline"><span>Comissão da funcionária</span><span>' + money(p.comissao) + '</span></div>' +
+          '<div class="sumline tot"><span>Lucro por pacote</span><span style="color:' + (Number(p.lucro_pacote) >= 0 ? 'var(--ok)' : 'var(--bad)') + '">' + money(p.lucro_pacote) + ' (' + String(m).replace('.', ',') + '%)</span></div>' +
+          '<div class="small mut">Vendidos no mês: <b>' + p.vendidos + '</b> pacotes → lucro de <b>' + money(p.lucro_total) + '</b></div>' : '<div class="small mut">Cadastre quanto custa a mercadoria para ver o lucro.</div>') +
+        '<button class="btn sm ' + (ct ? 'sec' : '') + '" style="margin-top:8px" data-custo="' + p.id + '">' + (ct ? 'Editar custo' : 'Cadastrar custo') + '</button></div>';
+    }).join('') || '<div class="card mut">Nenhum produto.</div>';
+    $('view').innerHTML = h;
+    $('mMes').onchange = (e) => { if (e.target.value) { mesSel = e.target.value; tLucro(); } };
+    document.querySelectorAll('[data-custo]').forEach((b) => { b.onclick = () => custoModal(lista.find((x) => x.id === b.dataset.custo), r.comissao_pacote); });
+  }
+  function custoModal(p, com) {
+    const c = p.custo || {}, v = (x) => (x == null ? '' : String(x).replace('.', ','));
+    modal('<h3>Custo — ' + esc(p.nome) + '</h3><div class="small mut">Preencha com a última compra. O sistema calcula quanto custa cada pacote já descontando o que se perde na limpeza.</div>' +
+      '<div class="cols m1"><div><label>Comprou (kg)</label><input id="cK" inputmode="decimal" placeholder="20" value="' + v(c.compra_kg) + '"></div><div><label>Pagou (R$)</label><input id="cV" inputmode="decimal" value="' + v(c.compra_valor) + '"></div></div>' +
+      '<div class="cols m1"><div><label>Depois de limpar sobrou (kg)</label><input id="cL" inputmode="decimal" placeholder="15" value="' + v(c.limpo_kg) + '"></div><div><label>Cada pacote leva (kg limpo)</label><input id="cP" inputmode="decimal" placeholder="0,5" value="' + v(c.kg_por_pacote) + '"></div></div>' +
+      '<label>Outros custos por pacote (palito, embalagem, gelo, gás) — R$</label><input id="cO" inputmode="decimal" value="' + v(c.outros_custos == null ? 0 : c.outros_custos) + '">' +
+      '<label>OU custo da mercadoria por pacote, direto (R$) — deixe vazio para usar a conta acima</label><input id="cM" inputmode="decimal" value="' + v(c.custo_manual) + '">' +
+      '<div class="card" id="cPrev" style="margin-top:10px"></div><div id="cErr"></div><div class="row" style="margin-top:10px"><button class="btn sec grow" id="cNo">Cancelar</button><button class="btn grow" id="cOk">Salvar custo</button></div>');
+    const n = (id) => { const x = numBR($(id).value); return isNaN(x) ? 0 : x; };
+    const calc = () => {
+      const K = n('cK'), V = n('cV'), L = n('cL'), P = n('cP'), O = n('cO'), M = $('cM').value.trim() === '' ? null : n('cM');
+      const merc = M != null ? M : (K > 0 && L > 0 && P > 0 ? V / L * P : null);
+      if (merc == null) { $('cPrev').innerHTML = '<span class="mut">Preencha os campos para ver o custo do pacote.</span>'; return null; }
+      const perda = K > 0 && L > 0 ? Math.round((1 - L / K) * 100) : null, total = merc + O, luc = Number(p.preco_pacote) - total - Number(com);
+      $('cPrev').innerHTML = (perda != null && M == null ? '<div class="small mut">Perda na limpeza: <b>' + perda + '%</b> • custo por kg limpo: <b>' + money(V / L) + '</b></div>' : '') +
+        '<div class="sumline"><span>Custo da mercadoria por pacote</span><b>' + money(merc + O) + '</b></div><div class="sumline"><span>Comissão</span><span>' + money(com) + '</span></div><div class="sumline tot"><span>Lucro por pacote</span><span style="color:' + (luc >= 0 ? 'var(--ok)' : 'var(--bad)') + '">' + money(luc) + ' (' + Math.round(luc / Number(p.preco_pacote) * 100) + '%)</span></div>';
+      return true;
+    };
+    ['cK', 'cV', 'cL', 'cP', 'cO', 'cM'].forEach((id) => { $(id).oninput = calc; }); calc();
+    $('cNo').onclick = closeModal;
+    $('cOk').onclick = act(async () => {
+      if (!calc()) { $('cErr').innerHTML = '<div class="errbox">Preencha os campos para calcular.</div>'; return; }
+      const M = $('cM').value.trim() === '' ? null : n('cM');
+      try { await q(sb.from('custos_produto').upsert({ produto_id: p.id, compra_kg: n('cK') || null, compra_valor: $('cV').value.trim() === '' ? null : n('cV'), limpo_kg: n('cL') || null, kg_por_pacote: n('cP') || null, outros_custos: n('cO'), custo_manual: M, atualizado_em: new Date().toISOString() }, { onConflict: 'produto_id' })); closeModal(); toast('Custo salvo.', 'ok'); tLucro(); }
+      catch (e) { $('cErr').innerHTML = '<div class="errbox">' + esc(e.message) + '</div>'; }
+    });
   }
 
   // ---------- admin: entrega / configurações ----------
